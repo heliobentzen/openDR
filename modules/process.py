@@ -1,7 +1,12 @@
 ## The entire python pipeline to process the image
 import cv2
+import os
+from pathlib import Path
 import sys
-sys.path.insert(0, '/home/pi/openDR/modules/') 
+
+base_folder = Path(os.environ.get("OPEN_DR_BASE", "/home/pi/openDR")).resolve()
+sys.path.insert(0, str(base_folder / "modules"))
+
 from extract import extract_fundus
 import remove_glare
 import theia

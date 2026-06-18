@@ -50,7 +50,7 @@ class Fundus_Cam(object):
     def continuous_capture(self):
         self.stopped = False
         self.images = []
-        self.capture_thread = Thread(target=self.update, args=(), daemon=True)
+        self.capture_thread = Thread(target=self.update, args=())
         self.capture_thread.start()
 
     def update(self):
@@ -60,9 +60,10 @@ class Fundus_Cam(object):
                 self.stopped = True
                 return
 
-    def wait_for_capture(self):
+    def wait_for_capture(self, timeout=5):
         if self.capture_thread is not None:
-            self.capture_thread.join()
+            self.capture_thread.join(timeout=timeout)
+        return self.stopped
 
     def flip_cam(self):
         self.flip_state = not self.flip_state

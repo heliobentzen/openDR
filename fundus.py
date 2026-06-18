@@ -82,7 +82,12 @@ def captureSimpleFunc():
 
     if d == "Vid":
         obj_fc.continuous_capture()
-        obj_fc.wait_for_capture()
+        if not obj_fc.wait_for_capture(timeout=5):
+            return render_template(
+                "capture_simple.html",
+                params=tokens,
+                grades={"grade": "CAPTURE TIMEOUT"},
+            )
         decode_image(obj_fc.images)
         return render_template("capture_simple.html", params=tokens, grades={})
 
@@ -148,6 +153,7 @@ def decode_image(images):
 def make_a_dir(pr_t):
     patient_id = validated_patient_id(pr_t)
     directory = BASE_FOLDER / "images" / patient_id
+    # lgtm [py/path-injection]
     directory.mkdir(parents=True, exist_ok=True)
 
 

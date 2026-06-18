@@ -1,145 +1,87 @@
 ##############################################################################
 #########################  Fundus_Cam.py             #########################
 #########################  Primary Author: Ebin      #########################
-#########################  Version : 1.0             #########################
+#########################  Version : 3.0             #########################
 #########################  Contributor: Ayush Yadav  #########################
 ##############################################################################
 
-
-from picamera.array import PiRGBArray
-from picamera import PiCamera
 from threading import Thread
+
 import cv2
 import numpy as np
-import io
+from picamera2 import Picamera2
 
 ###############################################################################
-### This class provides access to the picamera and its associated functions ###
+### This class provides access to the libcamera stack using Picamera2       ###
 ###############################################################################
+
 
 class Fundus_Cam(object):
+    def __init__(self, framerate=12, preview=False, max_frames=10):
+        self.camera = Picamera2()
+        sensor_resolution = self.camera.sensor_resolution
+        camera_config = self.camera.create_still_configuration(
+            main={"size": sensor_resolution},
+            controls={"FrameRate": framerate},
+        )
+        self.camera.configure(camera_config)
+        self.camera.start()
 
-    # The constructor initializes the camera object and starts preview
-    def __init__(self, framerate=12,preview=False):
-
-        # initialize the camera 
-        self.camera = PiCamera()
-        self.camera.resolution = self.camera.MAX_RESOLUTION
-        self.camera.framerate = framerate
-
-        # stream is a file-like type used to store captured images to memory
-        # rather than onto disk
-        self.stream = io.BytesIO()
-
-        # this determines the vertical flip_state of the picamera
-        # this can be toggled by Fundus_Cam.flip_cam()
-        self.flip_state=False
-
-        # This is a list to store images captured 
-        # in Fundus_Cam.continuous_capture() 
-        self.images=[]
-        self.camera.start_preview()
-
-        # used to stop and start recording in versions higher than1.0
+        self.flip_state = False
+        self.images = []
         self.stopped = False
+        self.image = None
+        self.max_frames = max_frames
+        self.capture_thread = None
+
+        if preview:
+            self.preview()
+
+    def _capture_jpeg_buffer(self):
+        frame = self.camera.capture_array()
+        if self.flip_state:
+            frame = cv2.flip(frame, 0)
+
+        encoded, image_bytes = cv2.imencode(".jpg", frame)
+        if not encoded:
+            raise RuntimeError(
+                "Unable to encode camera frame as JPEG. Check camera connection and frame data."
+            )
+        return np.frombuffer(image_bytes.tobytes(), dtype=np.uint8)
 
     def continuous_capture(self):
-        # starts a new thread, which runs the update()
         self.stopped = False
-        Thread(target=self.update, args=()).start()
-        
+        self.images = []
+        self.capture_thread = Thread(target=self.update, args=())
+        self.capture_thread.start()
 
-    # continuosly captures frames from the camera, in a seperate thread
     def update(self):
-        # keep looping infinitely until the thread is stopped
-        # In version 1.0 it grabs only 10 frames
         while True:
-                # grab the frame from the stream 
-                self.camera.capture(self.stream,format='jpeg',use_video_port=True)
-                # convert the frame captures to numpy array and append to images
-                self.images.append(np.fromstring(self.stream.getvalue(),dtype=np.uint8))
-                # clear the stream for the next frame
-                self.stream.truncate()
-                self.stream.seek(0)
-                if(len(self.images)>9):
-                    self.stopped=True
-                    return
-                
-    
-    # to flip the camera 
-    def flip_cam(self):
-        self.camera.vflip=(not self.flip_state)
+            self.images.append(self._capture_jpeg_buffer())
+            if len(self.images) >= self.max_frames:
+                self.stopped = True
+                return
 
-    #to capture a single image
+    def wait_for_capture(self, timeout=5):
+        if self.capture_thread is not None:
+            self.capture_thread.join(timeout=timeout)
+        return self.stopped
+
+    def flip_cam(self):
+        self.flip_state = not self.flip_state
+
     def capture(self):
-        self.camera.capture(self.stream,format='jpeg',use_video_port=True)
-        # convert to numpy array
-        self.image=np.fromstring(self.stream.getvalue(),dtype=np.uint8)
-        # clear the stream
-        self.stream.truncate()
-        self.stream.seek(0)
-        # return the captured image
+        self.image = self._capture_jpeg_buffer()
         return self.image
 
-    # to start camera preview
     def preview(self):
-        self.camera.start_preview()
+        # Picamera2 preview windows are not managed by this Flask service.
+        return
 
-    # to stop camera preview
     def stop_preview(self):
-        self.camera.stop_preview()
+        self.stop()
 
-    # used in version higher than 1.0
     def stop(self):
-        self.stopped=True
-
-
-        
-## decode function
-## decode,process and save the grabbed image
-## the decode function has been moved to the fundus_mod3.py file for easy access
-            
-
-##    def decode_image(images,path_sen,name):
-##    #name=raw_input("enter the name to be saved")
-##        no=1
-##        if type(images) is list:
-##        
-##            for img in images:
-##                image=cv2.imdecode(img,1)
-##                #image=get_fundus(image)
-##                cv2.imwrite(path_sen + name + '_'+str(no)+'.jpg',image)
-##                no=no+1
-##        else:
-##            image=cv2.imdecode(images,1)
-##            #image=get_fundus(image)
-##            cv2.imwrite(path_sen + name + '.jpg',image)   
-
-
-##############################################################################   
-#####################    End of Class Implementation  ########################
-##############################################################################
-
-   
-
-# for debugging
-if __name__=='__main__':
-    
-    fundus_cam=Fundus_Cam()
-    ## this part of the code is for debugging and testing the Fundus_Cam class
-    image=fundus_cam.capture()
-    raw_input("start continuous??")
-    fundus_cam.continuous_capture()
-    while not fundus_cam.stopped:
-        pass
-    print "decoding still"
-    decode_image(image)
-    print "decoding continuous capture"
-    decode_image(fundus_cam.images)
-    fundus_cam.stop_preview()
-    
-    
-        
-    
-
-    
+        self.stopped = True
+        if self.camera.started:
+            self.camera.stop()

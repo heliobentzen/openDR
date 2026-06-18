@@ -41,6 +41,6 @@ python3 fundus.py
 - Vertical camera flipping is now handled in software before JPEG encoding.
 
 ## Folder structure
-`images` contains captured patient/session images.  
+`images` contains captured patient/session images (patient ID included in filenames).  
 `modules` contains image processing and grading modules.  
 `static` and `templates` provide Flask UI assets.

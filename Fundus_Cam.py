@@ -44,7 +44,9 @@ class Fundus_Cam(object):
 
         encoded, image_bytes = cv2.imencode(".jpg", frame)
         if not encoded:
-            raise RuntimeError("Unable to encode camera frame as JPEG.")
+            raise RuntimeError(
+                "Unable to encode camera frame as JPEG. Check camera connection and frame data."
+            )
         return np.frombuffer(image_bytes.tobytes(), dtype=np.uint8)
 
     def continuous_capture(self):

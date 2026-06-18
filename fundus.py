@@ -86,7 +86,7 @@ def captureSimpleFunc():
             return render_template(
                 "capture_simple.html",
                 params=tokens,
-                grades={"grade": "CAPTURE TIMEOUT"},
+                grades={"grade": "CAPTURE TIMEOUT - RETRY OR CHECK CAMERA"},
             )
         decode_image(obj_fc.images)
         return render_template("capture_simple.html", params=tokens, grades={})
@@ -134,7 +134,7 @@ def decode_image(images):
 
     no = 1
     patient_id = validated_patient_id(processed_text)
-    patient_dir = BASE_FOLDER / "images" / patient_id
+    patient_dir = BASE_FOLDER / "images"
 
     if isinstance(images, list):
         for img in images:
@@ -151,9 +151,8 @@ def decode_image(images):
 
 
 def make_a_dir(pr_t):
-    patient_id = validated_patient_id(pr_t)
-    directory = BASE_FOLDER / "images" / patient_id
-    # lgtm [py/path-injection]
+    validated_patient_id(pr_t)
+    directory = BASE_FOLDER / "images"
     directory.mkdir(parents=True, exist_ok=True)
 
 

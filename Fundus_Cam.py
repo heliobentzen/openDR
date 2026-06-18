@@ -17,7 +17,7 @@ from picamera2 import Picamera2
 
 
 class Fundus_Cam(object):
-    def __init__(self, framerate=12, preview=False):
+    def __init__(self, framerate=12, preview=False, max_frames=10):
         self.camera = Picamera2()
         sensor_resolution = self.camera.sensor_resolution
         camera_config = self.camera.create_still_configuration(
@@ -31,6 +31,8 @@ class Fundus_Cam(object):
         self.images = []
         self.stopped = False
         self.image = None
+        self.max_frames = max_frames
+        self.capture_thread = None
 
         if preview:
             self.preview()
@@ -48,14 +50,19 @@ class Fundus_Cam(object):
     def continuous_capture(self):
         self.stopped = False
         self.images = []
-        Thread(target=self.update, args=()).start()
+        self.capture_thread = Thread(target=self.update, args=(), daemon=True)
+        self.capture_thread.start()
 
     def update(self):
         while True:
             self.images.append(self._capture_jpeg_buffer())
-            if len(self.images) > 9:
+            if len(self.images) >= self.max_frames:
                 self.stopped = True
                 return
+
+    def wait_for_capture(self):
+        if self.capture_thread is not None:
+            self.capture_thread.join()
 
     def flip_cam(self):
         self.flip_state = not self.flip_state
@@ -65,7 +72,7 @@ class Fundus_Cam(object):
         return self.image
 
     def preview(self):
-        # Picamera2 manages preview via libcamera and UI backends; no-op here.
+        # Picamera2 preview windows are not managed by this Flask service.
         return
 
     def stop_preview(self):
@@ -73,4 +80,5 @@ class Fundus_Cam(object):
 
     def stop(self):
         self.stopped = True
-        self.camera.stop()
+        if self.camera.started:
+            self.camera.stop()

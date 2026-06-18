@@ -22,8 +22,10 @@ def grade_request(filename):
 
     if response.status_code == 200:
         data = json.loads(response.text)
-        grade = float(str(data["grade"])[1:-1])
-        return grade
+        grade_value = data.get("grade")
+        if isinstance(grade_value, list) and grade_value:
+            return float(grade_value[0])
+        return float(grade_value)
     return -1
 
 

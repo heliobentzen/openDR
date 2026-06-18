@@ -5,9 +5,9 @@
 ##############################################################################
 
 import os
+import re
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import cv2
@@ -49,7 +49,9 @@ def my_form_post():
     global obj_fc
 
     obj_state = True
-    processed_text = request.form["text"].upper()
+    processed_text = sanitize_patient_id(request.form["text"].upper())
+    if not processed_text:
+        return render_template("index.html")
     make_a_dir(processed_text)
     obj_fc = Fundus_Cam()
     return redirect(url_for("captureSimpleFunc"))
@@ -79,8 +81,7 @@ def captureSimpleFunc():
 
     if d == "Vid":
         obj_fc.continuous_capture()
-        while not obj_fc.stopped:
-            time.sleep(0.01)
+        obj_fc.wait_for_capture()
         decode_image(obj_fc.images)
         return render_template("capture_simple.html", params=tokens, grades={})
 
@@ -126,27 +127,33 @@ def decode_image(images):
         file_w.write(str(picn))
 
     no = 1
-    last_img = str(
-        BASE_FOLDER
-        / "images"
-        / processed_text
-        / f"{processed_text}_{picn}_{no}.jpg"
-    )
+    patient_dir = BASE_FOLDER / "images" / processed_text
 
     if isinstance(images, list):
         for img in images:
+            image_path = patient_dir / f"{processed_text}_{picn}_{no}.jpg"
             image = cv2.imdecode(img, 1)
-            cv2.imwrite(last_img, image)
+            cv2.imwrite(str(image_path), image)
+            last_img = str(image_path)
             no += 1
     else:
+        image_path = patient_dir / f"{processed_text}_{picn}_{no}.jpg"
         image = cv2.imdecode(images, 1)
-        cv2.imwrite(last_img, image)
+        cv2.imwrite(str(image_path), image)
+        last_img = str(image_path)
 
 
 def make_a_dir(pr_t):
-    directory = BASE_FOLDER / "images" / pr_t
-    if not directory.exists():
-        os.mkdir(str(directory))
+    directory = (BASE_FOLDER / "images" / pr_t).resolve()
+    images_root = (BASE_FOLDER / "images").resolve()
+    if images_root not in directory.parents:
+        raise ValueError("Invalid patient directory path.")
+    directory.mkdir(parents=True, exist_ok=True)
+
+
+def sanitize_patient_id(value):
+    cleaned = re.sub(r"[^A-Z0-9_-]", "", value)
+    return cleaned
 
 
 orangeyellow = 14

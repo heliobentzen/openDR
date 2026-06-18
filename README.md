@@ -1,4 +1,4 @@
-## Open Indirect Opthalmoscope (OIO / OWL)
+## Open Indirect Ophthalmoscope (OIO / OWL)
 _Authors: Ayush Yadav, Ebin Philip, Dhruv Joshi_
 
 Built at the Srujana Center for Innovation, LV Prasad Eye Institute, Hyderabad, India.

@@ -33,6 +33,7 @@ processed_text = ""
 
 app = Flask(__name__)
 tokens = ["Flip", "Vid", "Click", "Switch", grade_val, "Shut"]
+PATIENT_ID_RE = re.compile(r"^[A-Z0-9_-]{1,64}$")
 
 
 @app.route("/")
@@ -127,33 +128,40 @@ def decode_image(images):
         file_w.write(str(picn))
 
     no = 1
-    patient_dir = BASE_FOLDER / "images" / processed_text
+    patient_id = validated_patient_id(processed_text)
+    patient_dir = BASE_FOLDER / "images" / patient_id
 
     if isinstance(images, list):
         for img in images:
-            image_path = patient_dir / f"{processed_text}_{picn}_{no}.jpg"
+            image_path = patient_dir / f"{patient_id}_{picn}_{no}.jpg"
             image = cv2.imdecode(img, 1)
             cv2.imwrite(str(image_path), image)
             last_img = str(image_path)
             no += 1
     else:
-        image_path = patient_dir / f"{processed_text}_{picn}_{no}.jpg"
+        image_path = patient_dir / f"{patient_id}_{picn}_{no}.jpg"
         image = cv2.imdecode(images, 1)
         cv2.imwrite(str(image_path), image)
         last_img = str(image_path)
 
 
 def make_a_dir(pr_t):
-    directory = (BASE_FOLDER / "images" / pr_t).resolve()
-    images_root = (BASE_FOLDER / "images").resolve()
-    if images_root not in directory.parents:
-        raise ValueError("Invalid patient directory path.")
+    patient_id = validated_patient_id(pr_t)
+    directory = BASE_FOLDER / "images" / patient_id
     directory.mkdir(parents=True, exist_ok=True)
 
 
 def sanitize_patient_id(value):
     cleaned = re.sub(r"[^A-Z0-9_-]", "", value)
-    return cleaned
+    if PATIENT_ID_RE.fullmatch(cleaned):
+        return cleaned
+    return ""
+
+
+def validated_patient_id(value):
+    if not PATIENT_ID_RE.fullmatch(value):
+        raise ValueError("Invalid patient identifier.")
+    return value
 
 
 orangeyellow = 14

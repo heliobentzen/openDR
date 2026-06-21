@@ -148,18 +148,18 @@ def decode_image(patient_id, images):
     no = 1
     patient_id = validated_patient_id(patient_id)
     patient_dir = BASE_FOLDER / "images"
-    capture_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{uuid4().hex}"
+    image_identifier = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{uuid4().hex}"
     last_saved_path = None
 
     if isinstance(images, list):
         for img in images:
-            image_path = patient_dir / f"{patient_id}_{capture_id}_{no}.jpg"
+            image_path = patient_dir / f"{patient_id}_{image_identifier}_{no}.jpg"
             image = cv2.imdecode(img, 1)
             cv2.imwrite(str(image_path), image)
             last_saved_path = str(image_path)
             no += 1
     else:
-        image_path = patient_dir / f"{patient_id}_{capture_id}_{no}.jpg"
+        image_path = patient_dir / f"{patient_id}_{image_identifier}_{no}.jpg"
         image = cv2.imdecode(images, 1)
         cv2.imwrite(str(image_path), image)
         last_saved_path = str(image_path)
@@ -194,7 +194,8 @@ def init_gpio():
 
     if pi is None:
         controller = pigpio.pi()
-        if hasattr(controller, "connected") and not controller.connected:
+        connected = getattr(controller, "connected", True)
+        if not connected:
             app.logger.warning("pigpio daemon is unavailable; GPIO output is disabled.")
             return None
         controller.set_mode(orangeyellow, pigpio.OUTPUT)

@@ -2,7 +2,7 @@ import cv2
 
 try:
     import imutils
-except ImportError:  # pragma: no cover - optional for manual demo use
+except ImportError:  # pragma: no cover - only needed for standalone demo execution
     imutils = None
 
 from modules.extract import ellipse_fit, erode_thresh, extract_circles

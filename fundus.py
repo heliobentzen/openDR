@@ -194,8 +194,7 @@ def init_gpio():
 
     if pi is None:
         controller = pigpio.pi()
-        connected = getattr(controller, "connected", False)
-        if not connected:
+        if not controller.connected:
             app.logger.warning("pigpio daemon is unavailable; GPIO output is disabled.")
             return None
         controller.set_mode(orangeyellow, pigpio.OUTPUT)

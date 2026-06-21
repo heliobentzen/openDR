@@ -46,7 +46,7 @@
   </head>
   <body>
      <div class="container-fluid" > 
-      <div  id="grade" class="">{{ grades['grade'] }}</div>
+      <div  id="grade" class="">{{ grades.get('grade', '') }}</div>
       <div id="buttonarea">
         <table border="0" class="table">
           {% for o in params %}
@@ -54,11 +54,12 @@
         <td>
           <form method="post">
             <button class="button_style" name="d" value="{{o}}"> {{o}}</button>
+          </form>
         </td>
         </tr>
       {% endfor %}
+        </table>
       </div>
     </div>
   </body>
 </html>	
-

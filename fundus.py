@@ -7,33 +7,50 @@
 import os
 import re
 import subprocess
-import sys
+from datetime import datetime
 from pathlib import Path
+from threading import Lock
 
 import cv2
-import pigpio
 from flask import Flask, redirect, render_template, request, url_for
 
 from Fundus_Cam import Fundus_Cam
+from modules.process import grade
 
-
-BASE_FOLDER = Path(os.environ.get("OPEN_DR_BASE", "/home/pi/openDR")).resolve()
-MODULES_DIR = BASE_FOLDER / "modules"
-if str(MODULES_DIR) not in sys.path:
-    sys.path.insert(0, str(MODULES_DIR))
-
-import process  # noqa: E402
-from process import grade  # noqa: E402
-
-grade_val = "Grade"
-last_img = "1"
-obj_state = False
-obj_fc = None
-processed_text = ""
+try:
+    import pigpio
+except ImportError:  # pragma: no cover - depends on Raspberry Pi runtime
+    pigpio = None
 
 app = Flask(__name__)
-tokens = ["Flip", "Vid", "Click", "Switch", grade_val, "Shut"]
+BASE_FOLDER = Path(os.environ.get("OPEN_DR_BASE", "/home/pi/openDR")).resolve()
+TOKENS = ["Flip", "Vid", "Click", "Switch", "Grade", "Shut"]
 PATIENT_ID_RE = re.compile(r"^[A-Z0-9_-]{1,64}$")
+
+orangeyellow = 14
+bluegreen = 15
+switch = 4
+pi = None
+
+
+class CameraSessionState:
+    def __init__(self):
+        self.lock = Lock()
+        self.camera = None
+        self.last_img = None
+        self.patient_id = ""
+
+    def reset(self):
+        self.patient_id = ""
+        self.last_img = None
+
+    def stop_camera(self):
+        if self.camera is not None:
+            self.camera.stop()
+            self.camera = None
+
+
+state = CameraSessionState()
 
 
 @app.route("/")
@@ -44,110 +61,109 @@ def my_form():
 
 @app.route("/", methods=["POST"])
 def my_form_post():
-    global processed_text
-    global obj_state
-    global last_img
-    global obj_fc
-
-    obj_state = True
-    processed_text = sanitize_patient_id(request.form["text"].upper())
-    if not processed_text:
+    patient_id = sanitize_patient_id(request.form["text"].upper())
+    if not patient_id:
         return render_template("index.html")
-    make_a_dir(processed_text)
-    obj_fc = Fundus_Cam()
+
+    make_a_dir(patient_id)
+    with state.lock:
+        state.stop_camera()
+        state.patient_id = patient_id
+        state.last_img = None
+        state.camera = Fundus_Cam()
     return redirect(url_for("captureSimpleFunc"))
 
 
 @app.route("/captureSimple", methods=["GET", "POST"])
 def captureSimpleFunc():
-    global last_img
-    global grade_val
-
     if request.method == "GET":
-        return render_template("capture_simple.html", params=tokens, grades={})
+        return render_capture()
 
     if "d" not in request.form:
-        return render_template("capture_simple.html", params=tokens, grades={})
+        return render_capture()
 
     d = request.form["d"]
 
     if d == "Click":
-        obj_fc.capture()
-        decode_image(obj_fc.image)
-        return render_template("capture_simple.html", params=tokens, grades={})
+        with state.lock:
+            if state.camera is None or not state.patient_id:
+                return render_capture("NO ACTIVE CAPTURE SESSION")
+            image = state.camera.capture()
+            state.last_img = decode_image(state.patient_id, image)
+        return render_capture()
 
     if d == "Flip":
-        obj_fc.flip_cam()
-        return render_template("capture_simple.html", params=tokens, grades={})
+        with state.lock:
+            if state.camera is None:
+                return render_capture("NO ACTIVE CAPTURE SESSION")
+            state.camera.flip_cam()
+        return render_capture()
 
     if d == "Vid":
-        obj_fc.continuous_capture()
-        if not obj_fc.wait_for_capture(timeout=5):
-            return render_template(
-                "capture_simple.html",
-                params=tokens,
-                grades={"grade": "CAPTURE TIMEOUT - RETRY OR CHECK CAMERA"},
-            )
-        decode_image(obj_fc.images)
-        return render_template("capture_simple.html", params=tokens, grades={})
+        with state.lock:
+            if state.camera is None or not state.patient_id:
+                return render_capture("NO ACTIVE CAPTURE SESSION")
+            state.camera.continuous_capture()
+            if not state.camera.wait_for_capture(timeout=5):
+                return render_capture("CAPTURE TIMEOUT - RETRY OR CHECK CAMERA")
+            state.last_img = decode_image(state.patient_id, state.camera.images)
+        return render_capture()
 
-    if d == grade_val:
-        if last_img == "1":
-            return render_template(
-                "capture_simple.html",
-                params=tokens,
-                grades={"grade": "NO IMAGE SPECIFIED"},
-            )
+    if d == "Grade":
+        with state.lock:
+            last_img = state.last_img
+        if last_img is None:
+            return render_capture("NO IMAGE SPECIFIED")
 
-        grade_val = str(grade(last_img))[:4]
-        print("the grade is " + grade_val)
-        return render_template(
-            "capture_simple.html",
-            params=tokens,
-            grades={"grade": grade_val},
-        )
+        grade_result = str(grade(last_img))[:4]
+        print("the grade is " + grade_result)
+        return render_capture(grade_result)
 
     if d == "Switch":
-        if obj_state is True:
-            obj_fc.stop_preview()
-            obj_fc.stop()
+        with state.lock:
+            has_camera = state.camera is not None
+            state.stop_camera()
+            state.reset()
+        if has_camera:
             return redirect(url_for("my_form"))
-        return render_template("capture_simple.html", params=tokens, grades={})
+        return render_capture()
 
     if d == "Shut":
         shut_down()
-        return render_template("capture_simple.html", params=tokens, grades={})
+        return render_capture()
 
-    return render_template("capture_simple.html", params=tokens, grades={})
+    return render_capture()
 
 
-def decode_image(images):
-    global last_img
+def render_capture(grade_message=""):
+    return render_template(
+        "capture_simple.html",
+        params=TOKENS,
+        grades={"grade": grade_message},
+    )
 
-    name_file = BASE_FOLDER / "name"
-    with name_file.open("r", encoding="utf-8") as file_r:
-        picn = int(file_r.read().strip())
 
-    picn += 1
-    with name_file.open("w", encoding="utf-8") as file_w:
-        file_w.write(str(picn))
-
+def decode_image(patient_id, images):
     no = 1
-    patient_id = validated_patient_id(processed_text)
+    validated_patient_id(patient_id)
     patient_dir = BASE_FOLDER / "images"
+    capture_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    last_saved_path = None
 
     if isinstance(images, list):
         for img in images:
-            image_path = patient_dir / f"{patient_id}_{picn}_{no}.jpg"
+            image_path = patient_dir / f"{patient_id}_{capture_id}_{no}.jpg"
             image = cv2.imdecode(img, 1)
             cv2.imwrite(str(image_path), image)
-            last_img = str(image_path)
+            last_saved_path = str(image_path)
             no += 1
     else:
-        image_path = patient_dir / f"{patient_id}_{picn}_{no}.jpg"
+        image_path = patient_dir / f"{patient_id}_{capture_id}_{no}.jpg"
         image = cv2.imdecode(images, 1)
         cv2.imwrite(str(image_path), image)
-        last_img = str(image_path)
+        last_saved_path = str(image_path)
+
+    return last_saved_path
 
 
 def make_a_dir(pr_t):
@@ -169,25 +185,39 @@ def validated_patient_id(value):
     return value
 
 
-orangeyellow = 14
-bluegreen = 15
-switch = 4
+def init_gpio():
+    global pi
 
-pi = pigpio.pi()
-pi.set_mode(orangeyellow, pigpio.OUTPUT)
-pi.set_mode(bluegreen, pigpio.OUTPUT)
-pi.set_mode(switch, pigpio.INPUT)
-pi.set_pull_up_down(switch, pigpio.PUD_UP)
+    if pigpio is None:
+        return None
+
+    if pi is None:
+        controller = pigpio.pi()
+        if hasattr(controller, "connected") and not controller.connected:
+            return None
+        controller.set_mode(orangeyellow, pigpio.OUTPUT)
+        controller.set_mode(bluegreen, pigpio.OUTPUT)
+        controller.set_mode(switch, pigpio.INPUT)
+        controller.set_pull_up_down(switch, pigpio.PUD_UP)
+        pi = controller
+
+    return pi
 
 
 def normalON():
-    pi.write(orangeyellow, 0)
-    pi.write(bluegreen, 1)
+    controller = init_gpio()
+    if controller is None:
+        return
+    controller.write(orangeyellow, 0)
+    controller.write(bluegreen, 1)
 
 
 def secondaryON():
-    pi.write(orangeyellow, 1)
-    pi.write(bluegreen, 0)
+    controller = init_gpio()
+    if controller is None:
+        return
+    controller.write(orangeyellow, 1)
+    controller.write(bluegreen, 0)
 
 
 def shut_down():
@@ -198,4 +228,5 @@ def shut_down():
 
 
 if __name__ == "__main__":
+    init_gpio()
     app.run(host="0.0.0.0", threaded=True)

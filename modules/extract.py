@@ -1,6 +1,5 @@
 import cv2
 import numpy as np
-import imutils
 
 # constants for extract_circles()
 center=(1386,948)

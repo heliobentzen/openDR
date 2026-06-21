@@ -1,16 +1,21 @@
-from importlib.util import find_spec
-
 import cv2
 
-_has_imutils = find_spec("imutils") is not None
-if _has_imutils:
-    import imutils
+
+def _load_imutils():
+    try:
+        import imutils as imported_imutils
+    except ImportError:  # pragma: no cover - only needed for standalone demo execution
+        return None
+    return imported_imutils
+
+
+imutils = _load_imutils()
 
 from modules.extract import ellipse_fit, erode_thresh, extract_circles
 
 
 def main(image_path="owl1.jpg"):
-    if not _has_imutils:
+    if imutils is None:
         raise ImportError("imutils is required to run image_processing.py")
 
     test_img = cv2.imread(image_path)

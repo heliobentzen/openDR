@@ -7,7 +7,7 @@
 import os
 import re
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from uuid import uuid4
@@ -167,7 +167,9 @@ def save_captured_images(patient_id, images):
 
 
 def build_image_path(patient_dir, patient_id, capture_number):
-    image_identifier = f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S%f')}_{uuid4().hex}"
+    image_identifier = (
+        f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S%f')}_{uuid4().hex}"
+    )
     return patient_dir / f"{patient_id}_{image_identifier}_{capture_number}.jpg"
 
 
@@ -200,7 +202,10 @@ def init_gpio():
         controller = pigpio.pi()
         if not controller.connected:
             app.logger.warning("pigpio daemon is unavailable; GPIO output is disabled.")
-            controller.stop()
+            try:
+                controller.stop()
+            except Exception:  # pragma: no cover - best-effort cleanup on hardware init
+                pass
             return None
         controller.set_mode(orangeyellow, pigpio.OUTPUT)
         controller.set_mode(bluegreen, pigpio.OUTPUT)

@@ -90,7 +90,7 @@ def captureSimpleFunc():
             if state.camera is None or not state.patient_id:
                 return render_capture("NO ACTIVE CAPTURE SESSION")
             image = state.camera.capture()
-            state.last_img = decode_image(state.patient_id, image)
+            state.last_img = save_captured_images(state.patient_id, image)
         return render_capture()
 
     if d == "Flip":
@@ -107,7 +107,7 @@ def captureSimpleFunc():
             state.camera.continuous_capture()
             if not state.camera.wait_for_capture(timeout=5):
                 return render_capture("CAPTURE TIMEOUT - RETRY OR CHECK CAMERA")
-            state.last_img = decode_image(state.patient_id, state.camera.images)
+            state.last_img = save_captured_images(state.patient_id, state.camera.images)
         return render_capture()
 
     if d == "Grade":
@@ -144,7 +144,7 @@ def render_capture(grade_message=""):
     )
 
 
-def decode_image(patient_id, images):
+def save_captured_images(patient_id, images):
     no = 1
     patient_id = validated_patient_id(patient_id)
     patient_dir = BASE_FOLDER / "images"
@@ -167,7 +167,7 @@ def decode_image(patient_id, images):
 
 
 def build_image_path(patient_dir, patient_id, capture_number):
-    image_identifier = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex}"
+    image_identifier = f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S%f')}_{uuid4().hex}"
     return patient_dir / f"{patient_id}_{image_identifier}_{capture_number}.jpg"
 
 

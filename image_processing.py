@@ -2,15 +2,15 @@ from importlib.util import find_spec
 
 import cv2
 
-IMUTILS_AVAILABLE = find_spec("imutils") is not None
-if IMUTILS_AVAILABLE:
+_has_imutils = find_spec("imutils") is not None
+if _has_imutils:
     import imutils
 
 from modules.extract import ellipse_fit, erode_thresh, extract_circles
 
 
 def main(image_path="owl1.jpg"):
-    if not IMUTILS_AVAILABLE:
+    if not _has_imutils:
         raise ImportError("imutils is required to run image_processing.py")
 
     test_img = cv2.imread(image_path)

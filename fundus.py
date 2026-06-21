@@ -148,23 +148,27 @@ def decode_image(patient_id, images):
     no = 1
     patient_id = validated_patient_id(patient_id)
     patient_dir = BASE_FOLDER / "images"
-    image_identifier = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex}"
     last_saved_path = None
 
     if isinstance(images, list):
         for img in images:
-            image_path = patient_dir / f"{patient_id}_{image_identifier}_{no}.jpg"
+            image_path = build_image_path(patient_dir, patient_id, no)
             image = cv2.imdecode(img, 1)
             cv2.imwrite(str(image_path), image)
             last_saved_path = str(image_path)
             no += 1
     else:
-        image_path = patient_dir / f"{patient_id}_{image_identifier}_{no}.jpg"
+        image_path = build_image_path(patient_dir, patient_id, no)
         image = cv2.imdecode(images, 1)
         cv2.imwrite(str(image_path), image)
         last_saved_path = str(image_path)
 
     return last_saved_path
+
+
+def build_image_path(patient_dir, patient_id, capture_number):
+    image_identifier = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex}"
+    return patient_dir / f"{patient_id}_{image_identifier}_{capture_number}.jpg"
 
 
 def make_a_dir(pr_t):
@@ -196,6 +200,7 @@ def init_gpio():
         controller = pigpio.pi()
         if not controller.connected:
             app.logger.warning("pigpio daemon is unavailable; GPIO output is disabled.")
+            controller.stop()
             return None
         controller.set_mode(orangeyellow, pigpio.OUTPUT)
         controller.set_mode(bluegreen, pigpio.OUTPUT)

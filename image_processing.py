@@ -1,10 +1,16 @@
 import cv2
 
+try:
+    import imutils
+except ImportError:  # pragma: no cover - optional for manual demo use
+    imutils = None
+
 from modules.extract import ellipse_fit, erode_thresh, extract_circles
 
 
 def main(image_path="owl1.jpg"):
-    import imutils
+    if imutils is None:
+        raise ImportError("imutils is required to run image_processing.py")
 
     test_img = cv2.imread(image_path)
     if test_img is None:

@@ -10,6 +10,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
+from uuid import uuid4
 
 import cv2
 from flask import Flask, redirect, render_template, request, url_for
@@ -145,9 +146,9 @@ def render_capture(grade_message=""):
 
 def decode_image(patient_id, images):
     no = 1
-    validated_patient_id(patient_id)
+    patient_id = validated_patient_id(patient_id)
     patient_dir = BASE_FOLDER / "images"
-    capture_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    capture_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{uuid4().hex}"
     last_saved_path = None
 
     if isinstance(images, list):
@@ -194,6 +195,7 @@ def init_gpio():
     if pi is None:
         controller = pigpio.pi()
         if hasattr(controller, "connected") and not controller.connected:
+            app.logger.warning("pigpio daemon is unavailable; GPIO output is disabled.")
             return None
         controller.set_mode(orangeyellow, pigpio.OUTPUT)
         controller.set_mode(bluegreen, pigpio.OUTPUT)

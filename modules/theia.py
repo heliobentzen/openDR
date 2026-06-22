@@ -28,6 +28,3 @@ def grade_request(filename):
         return float(grade_value)
     return -1
 
-
-## BEGIN THE REQUEST:
-# print grade_request(open('normal1.jpg', 'rb'))

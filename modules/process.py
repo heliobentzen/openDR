@@ -9,7 +9,7 @@ optional Grad-CAM explanation step is available via
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import cv2
 
@@ -54,6 +54,7 @@ def grade(filename: str) -> float:
 def grade_with_explanation(
     filename: str,
     model_path: str | None = None,
+    status_callback: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
     """Process a fundus image, grade it, and generate a Grad-CAM explanation.
 
@@ -100,8 +101,16 @@ def grade_with_explanation(
 
     processed_image = remove_glare.remove_glare(extract_fundus(filename))
     cv2.imwrite(processed_path, processed_image)
+    if status_callback is not None:
+        status_callback("preprocessing", processed_path=processed_path)
 
     theia_grade = theia.grade_request(processed_path)
+    if status_callback is not None:
+        status_callback(
+            "inference",
+            processed_path=processed_path,
+            theia_grade=theia_grade,
+        )
     try:
         gradcam_record = gradcam.run_gradcam(
             processed_image, processed_path, model_path=model_path
@@ -109,8 +118,15 @@ def grade_with_explanation(
     except (RuntimeError, ValueError) as exc:
         raise RuntimeError(f"Grad-CAM explanation step failed: {exc}") from exc
 
+    if status_callback is not None:
+        status_callback(
+            "report",
+            processed_path=processed_path,
+            theia_grade=theia_grade,
+            gradcam=gradcam_record,
+        )
+
     return {
         "theia_grade": theia_grade,
         "gradcam": gradcam_record,
     }
-

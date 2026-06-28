@@ -39,6 +39,7 @@ MIN_DARK_DENSITY = 0.20
 MIN_DARK_RATIO = 0.01
 MAX_DARK_RATIO = 0.42
 PREVIEW_MIN_INTERVAL_S = 0.20
+INFERENCE_WORKER_COUNT = max(1, int(os.environ.get("OPEN_DR_INFERENCE_WORKERS", "2")))
 INFERENCE_STEPS = (
     ("received", "Imagem recebida"),
     ("preprocessing", "Pré-processamento (limpeza de ruído)"),
@@ -76,12 +77,15 @@ preview_rate_lock = Lock()
 preview_last_request = {}
 inference_jobs_lock = Lock()
 inference_jobs = {}
-inference_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="inference")
+inference_executor = ThreadPoolExecutor(
+    max_workers=INFERENCE_WORKER_COUNT,
+    thread_name_prefix="inference",
+)
 
 
 @atexit.register
 def shutdown_inference_executor():
-    inference_executor.shutdown(wait=False, cancel_futures=False)
+    inference_executor.shutdown(wait=False, cancel_futures=True)
 
 
 @app.route("/")
@@ -449,7 +453,11 @@ def run_explanation_job(job_id, image_path):
         app.logger.exception("Inference job %s failed during report generation.", job_id)
         fail_inference_job(job_id, f"GRAD-CAM ERROR: {exc}")
     except (OSError, ValueError, KeyError) as exc:  # pragma: no cover - runtime safeguards
-        app.logger.exception("Inference job %s failed unexpectedly.", job_id)
+        app.logger.exception(
+            "Inference job %s failed with %s.",
+            job_id,
+            type(exc).__name__,
+        )
         fail_inference_job(job_id, f"INFERENCE ERROR: {exc}")
 
 

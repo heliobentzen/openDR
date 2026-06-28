@@ -92,6 +92,7 @@
     <aside
       id="workflow-panel"
       data-inference-job-id="{{ inference_job_id or '' }}"
+      data-poll-interval-ms="1000"
       class="w-[22rem] shrink-0 border-l border-slate-700 bg-slate-900/95 p-4 flex flex-col gap-4 overflow-y-auto"
     >
       <div>
@@ -162,6 +163,7 @@
     };
 
     if (Object.values(elements).some((element) => !element)) {
+      console.warn('OWL capture UI: required workflow elements were not found.');
       return;
     }
 
@@ -187,7 +189,10 @@
 
     const context = canvas.getContext('2d', { willReadFrequently: true });
     const PREVIEW_UPDATE_INTERVAL_MS = 500;
-    const INFERENCE_POLL_INTERVAL_MS = 1000;
+    const INFERENCE_POLL_INTERVAL_MS = Number.parseInt(
+      workflowPanel.dataset.pollIntervalMs || '1000',
+      10,
+    );
     const MIN_FOCUS_SCORE = 140;
     const DARK_PIXEL_THRESHOLD = 58;
     const MIN_DARK_PIXELS = 120;
@@ -360,7 +365,7 @@
           cache: 'no-store',
         });
         if (!response.ok) {
-          throw new Error('inference status unavailable');
+          throw new Error(`inference status unavailable (${response.status} ${response.statusText})`);
         }
         const payload = await response.json();
         renderInferenceStatus(payload);

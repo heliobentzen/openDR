@@ -1,95 +1,67 @@
-<!-- Still have to comment stuff here -->
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Capture_Image</title>
-  <!--Importing Bootstrap here-->
-  <link href="{{ url_for('static',filename='css/bootstrap.min.css')}}" rel="stylesheet">
-  <style>
-        .container-fluid{
-	    max-width: 800px;
-	    padding: 2px;   
-        }
-        button{
-	    width: 70px;
-            height : 65px;
-	    margin-left: 2px;
-	    border: none;
-	    background-color: #33cccc;
-	    text-align:center;
-	    color: white;
-            } 
-        button:active{
-	    background-color:#00ff99
-            }
-        button:hover{
-	    background-color: #009999;
-            }
-        body{
-	    background-color: #000000;
-            }
-        #grade {
-            background:black;
-            color: white;
-            font-weight: bold;
-            font-size: 16px;
-            position:fixed;
-            right:0;
-            height: 100%;
-            width:10%;
-            padding-top: 40px;
-            font-family: Helvetica;
-            display:block;
-            text-align: right;
-            }
-        #gradcam-panel {
-            background: #111;
-            color: #eee;
-            font-family: Helvetica, sans-serif;
-            font-size: 13px;
-            margin-top: 10px;
-            padding: 8px;
-            border: 1px solid #33cccc;
-            border-radius: 4px;
-            }
-        #gradcam-panel img {
-            max-width: 100%;
-            margin-top: 6px;
-            border: 1px solid #33cccc;
-            }
-        #gradcam-panel a {
-            color: #33cccc;
-            }
-  </style>
-  </head>
-  <body>
-     <div class="container-fluid" > 
-      <div  id="grade" class="">{{ grades.get('grade', '') }}</div>
-      <div id="buttonarea">
-        <table border="0" class="table">
-          {% for o in params %}
-        <tr>
-        <td>
-          <form method="post">
-            <button class="button_style" name="d" value="{{o}}"> {{o}}</button>
-          </form>
-        </td>
-        </tr>
-      {% endfor %}
-        </table>
-      </div>
-      {% if overlay_filename %}
-      <div id="gradcam-panel">
-        <strong>Grad-CAM Explanation</strong><br>
-        DR Label: {{ dr_label }} &nbsp;|&nbsp;
-        Confidence: {{ "%.1f"|format(confidence * 100) }}% &nbsp;|&nbsp;
-        Lesion regions: {{ lesion_count }}<br>
-        <img src="{{ url_for('serve_image', filename=overlay_filename) }}"
-             alt="Grad-CAM heatmap overlay"><br>
-        <a href="{{ url_for('serve_image', filename=json_filename) }}"
-           download="{{ json_filename }}">&#x2B07; Download audit JSON</a>
-      </div>
-      {% endif %}
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Capture – OWL openDR</title>
+  <link href="{{ url_for('static', filename='css/tailwind.css') }}" rel="stylesheet">
+</head>
+
+<body class="h-screen bg-slate-950 text-white flex overflow-hidden">
+
+  <!-- ── Camera Control Panel (left sidebar) ─────────────────────────── -->
+  <aside class="bg-slate-900 border-r border-slate-700 flex flex-col items-center gap-2 p-3 w-24 shrink-0">
+    <p class="text-slate-500 text-xs uppercase tracking-widest mb-1">Controls</p>
+    {% for o in params %}
+    <form method="post" class="w-full">
+      <button
+        name="d"
+        value="{{ o }}"
+        class="w-full py-3 rounded-lg bg-teal-700 hover:bg-teal-600 active:bg-emerald-500 text-white text-xs font-semibold text-center transition"
+      >{{ o }}</button>
+    </form>
+    {% endfor %}
+  </aside>
+
+  <!-- ── Retina Preview Area (main content) ──────────────────────────── -->
+  <main class="flex-1 flex flex-col overflow-hidden">
+
+    <!-- Grade / status header bar -->
+    <div class="bg-slate-900 border-b border-slate-700 px-4 py-2 flex items-center justify-between shrink-0">
+      <span class="text-slate-500 text-xs uppercase tracking-widest">Retina Preview</span>
+      <span class="font-bold text-sm text-amber-400" aria-label="Grade: {{ grades.get('grade', 'Not Available') }}">{{ grades.get('grade') or 'N/A' }}</span>
     </div>
-  </body>
-</html>	
+
+    <!-- Live preview viewport -->
+    <div class="flex-1 flex items-center justify-center bg-black">
+    <p class="text-slate-700 text-sm select-none" role="status" aria-live="polite">No preview available</p>
+    </div>
+
+    <!-- Grad-CAM explanation panel (shown only when an overlay is available) -->
+    {% if overlay_filename %}
+    <div class="bg-slate-900 border-t border-teal-700 p-4 shrink-0">
+      <p class="text-teal-400 font-semibold text-sm mb-2">Grad-CAM Explanation</p>
+      <p class="text-slate-400 text-xs mb-3">
+        DR Label: <span class="text-white font-medium">{{ dr_label }}</span>
+        &nbsp;&middot;&nbsp;
+        Confidence: <span class="text-white font-medium">{{ "%.1f"|format(confidence * 100) }}%</span>
+        &nbsp;&middot;&nbsp;
+        Lesion regions: <span class="text-white font-medium">{{ lesion_count }}</span>
+      </p>
+      <img
+        src="{{ url_for('serve_image', filename=overlay_filename) }}"
+        alt="Grad-CAM heatmap overlay"
+        class="max-w-full rounded border border-teal-700 mb-3"
+      >
+      <a
+        href="{{ url_for('serve_image', filename=json_filename) }}"
+        download="{{ json_filename }}"
+        class="text-teal-400 hover:text-teal-300 text-xs underline transition"
+      >&#x2B07; Download audit JSON</a>
+    </div>
+    {% endif %}
+
+  </main>
+
+</body>
+</html>

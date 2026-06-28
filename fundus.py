@@ -13,10 +13,10 @@ from threading import Lock
 from uuid import uuid4
 
 import cv2
-from flask import Flask, redirect, render_template, request, url_for
+from flask import Flask, abort, redirect, render_template, request, send_from_directory, url_for
 
 from Fundus_Cam import Fundus_Cam
-from modules.process import grade
+from modules.process import grade, grade_with_explanation
 
 try:
     import pigpio
@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover - depends on Raspberry Pi runtime
 
 app = Flask(__name__)
 BASE_FOLDER = Path(os.environ.get("OPEN_DR_BASE", "/home/pi/openDR")).resolve()
-TOKENS = ["Flip", "Vid", "Click", "Switch", "Grade", "Shut"]
+TOKENS = ["Flip", "Vid", "Click", "Switch", "Grade", "Explain", "Shut"]
 PATIENT_ID_RE = re.compile(r"^[A-Z0-9_-]{1,64}$")
 
 orangeyellow = 14
@@ -120,6 +120,34 @@ def captureSimpleFunc():
         print("the grade is " + grade_result)
         return render_capture(grade_result)
 
+    if d == "Explain":
+        with state.lock:
+            last_img = state.last_img
+        if last_img is None:
+            return render_capture("NO IMAGE SPECIFIED")
+
+        try:
+            result = grade_with_explanation(last_img)
+        except RuntimeError as exc:
+            return render_capture(f"GRAD-CAM ERROR: {exc}")
+
+        grade_result = str(result["theia_grade"])[:4]
+        gradcam_record = result["gradcam"]
+        overlay_filename = Path(gradcam_record["gradcam_overlay"]).name
+        json_filename = Path(gradcam_record["gradcam_audit_json"]).name
+        dr_label = gradcam_record["predicted_dr_grade"]["label"]
+        confidence = gradcam_record["predicted_dr_grade"]["confidence"]
+        lesion_count = len(gradcam_record["lesion_regions"])
+        print(f"Grad-CAM complete: lesions detected={lesion_count}")
+        return render_capture(
+            grade_result,
+            overlay_filename=overlay_filename,
+            json_filename=json_filename,
+            dr_label=dr_label,
+            confidence=confidence,
+            lesion_count=lesion_count,
+        )
+
     if d == "Switch":
         with state.lock:
             has_camera = state.camera is not None
@@ -136,12 +164,46 @@ def captureSimpleFunc():
     return render_capture()
 
 
-def render_capture(grade_message=""):
+def render_capture(
+    grade_message="",
+    overlay_filename=None,
+    json_filename=None,
+    dr_label=None,
+    confidence=None,
+    lesion_count=None,
+):
     return render_template(
         "capture_simple.html",
         params=TOKENS,
         grades={"grade": grade_message},
+        overlay_filename=overlay_filename,
+        json_filename=json_filename,
+        dr_label=dr_label,
+        confidence=confidence,
+        lesion_count=lesion_count,
     )
+
+
+@app.route("/images/<path:filename>")
+def serve_image(filename):
+    """Serve captured and processed images from the patient images directory.
+
+    The filename is validated to reject path-traversal attempts before
+    handing it to :func:`~flask.send_from_directory`.
+    """
+    # Extract only the bare filename component to prevent traversal outside
+    # the images directory (e.g. "../../etc/passwd" → rejected).
+    safe_name = Path(filename).name
+    if safe_name != filename:
+        app.logger.warning("Rejected path-traversal attempt in /images: %s", filename)
+        abort(400)
+    images_dir = BASE_FOLDER / "images"
+    # Confirm the resolved path stays inside the images directory.
+    resolved = (images_dir / safe_name).resolve()
+    if not str(resolved).startswith(str(images_dir.resolve())):
+        app.logger.warning("Rejected out-of-directory request in /images: %s", filename)
+        abort(400)
+    return send_from_directory(str(images_dir), safe_name)
 
 
 def save_captured_images(patient_id, images):

@@ -42,6 +42,24 @@
             display:block;
             text-align: right;
             }
+        #gradcam-panel {
+            background: #111;
+            color: #eee;
+            font-family: Helvetica, sans-serif;
+            font-size: 13px;
+            margin-top: 10px;
+            padding: 8px;
+            border: 1px solid #33cccc;
+            border-radius: 4px;
+            }
+        #gradcam-panel img {
+            max-width: 100%;
+            margin-top: 6px;
+            border: 1px solid #33cccc;
+            }
+        #gradcam-panel a {
+            color: #33cccc;
+            }
   </style>
   </head>
   <body>
@@ -60,6 +78,18 @@
       {% endfor %}
         </table>
       </div>
+      {% if overlay_filename %}
+      <div id="gradcam-panel">
+        <strong>Grad-CAM Explanation</strong><br>
+        DR Label: {{ dr_label }} &nbsp;|&nbsp;
+        Confidence: {{ "%.1f"|format(confidence * 100) }}% &nbsp;|&nbsp;
+        Lesion regions: {{ lesion_count }}<br>
+        <img src="{{ url_for('serve_image', filename=overlay_filename) }}"
+             alt="Grad-CAM heatmap overlay"><br>
+        <a href="{{ url_for('serve_image', filename=json_filename) }}"
+           download="{{ json_filename }}">&#x2B07; Download audit JSON</a>
+      </div>
+      {% endif %}
     </div>
   </body>
 </html>	

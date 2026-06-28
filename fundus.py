@@ -27,6 +27,7 @@ app = Flask(__name__)
 BASE_FOLDER = Path(os.environ.get("OPEN_DR_BASE", "/home/pi/openDR")).resolve()
 TOKENS = ["Flip", "Vid", "Click", "Switch", "Grade", "Explain", "Shut"]
 PATIENT_ID_RE = re.compile(r"^[A-Z0-9_-]{1,64}$")
+FOCUS_WARNING_MESSAGE = "Posicione o paciente e foque antes de capturar"
 
 orangeyellow = 14
 bluegreen = 15
@@ -87,7 +88,7 @@ def captureSimpleFunc():
 
     if d == "Click":
         if request.form.get("focus_ok") != "1":
-            return render_capture("POSICIONE O PACIENTE E FOQUE ANTES DE CAPTURAR")
+            return render_capture(FOCUS_WARNING_MESSAGE)
         with state.lock:
             if state.camera is None or not state.patient_id:
                 return render_capture("NO ACTIVE CAPTURE SESSION")
@@ -190,6 +191,7 @@ def render_capture(
         "capture_simple.html",
         params=TOKENS,
         grades={"grade": grade_message},
+        focus_warning_message=FOCUS_WARNING_MESSAGE,
         overlay_filename=overlay_filename,
         json_filename=json_filename,
         dr_label=dr_label,

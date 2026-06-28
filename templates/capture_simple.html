@@ -48,7 +48,7 @@
         aria-live="assertive"
       >
         <p class="max-w-lg text-amber-300 font-semibold text-lg">
-          Posicione o paciente e foque antes de capturar
+          {{ focus_warning_message }}
         </p>
       </div>
     </div>
@@ -93,8 +93,13 @@
     }
 
     const context = canvas.getContext('2d', { willReadFrequently: true });
-    const PREVIEW_REFRESH_MS = 350;
-    const FOCUS_THRESHOLD = 140;
+    const PREVIEW_UPDATE_INTERVAL_MS = 350;
+    const MIN_FOCUS_SCORE = 140;
+    const DARK_PIXEL_THRESHOLD = 58;
+    const MIN_DARK_PIXELS = 120;
+    const MIN_DARK_DENSITY = 0.20;
+    const MIN_DARK_RATIO = 0.01;
+    const MAX_DARK_RATIO = 0.42;
 
     const setFocusState = (isReady) => {
       captureButton.disabled = !isReady;
@@ -121,7 +126,7 @@
       for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
         const value = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
         gray[p] = value;
-        if (value < 58) {
+        if (value < DARK_PIXEL_THRESHOLD) {
           darkCount += 1;
           const x = p % width;
           const y = (p / width) | 0;
@@ -132,7 +137,7 @@
         }
       }
 
-      if (darkCount < 120) {
+      if (darkCount < MIN_DARK_PIXELS) {
         return false;
       }
 
@@ -162,9 +167,13 @@
       const boxHeight = Math.max(1, maxY - minY + 1);
       const darkDensity = darkCount / (boxWidth * boxHeight);
       const darkRatio = darkCount / (width * height);
-      const hasEyeContour = darkDensity > 0.20 && darkRatio > 0.01 && darkRatio < 0.42;
+      const hasEyeContour = (
+        darkDensity > MIN_DARK_DENSITY
+        && darkRatio > MIN_DARK_RATIO
+        && darkRatio < MAX_DARK_RATIO
+      );
 
-      return focusScore >= FOCUS_THRESHOLD && hasEyeContour;
+      return focusScore >= MIN_FOCUS_SCORE && hasEyeContour;
     };
 
     const updatePreview = async () => {
@@ -195,7 +204,7 @@
 
     setFocusState(false);
     updatePreview();
-    setInterval(updatePreview, PREVIEW_REFRESH_MS);
+    setInterval(updatePreview, PREVIEW_UPDATE_INTERVAL_MS);
   })();
 </script>
 </html>

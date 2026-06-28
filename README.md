@@ -1,5 +1,6 @@
 ## Open Indirect Ophthalmoscope (OIO / OWL)
-_Authors: Ayush Yadav, Ebin Philip, Dhruv Joshi_
+_Original authors: Ayush Yadav, Ebin Philip, Dhruv Joshi_  
+_Maintained by: [@heliobentzen](https://github.com/heliobentzen), GitHub Copilot_
 
 Built at the Srujana Center for Innovation, LV Prasad Eye Institute, Hyderabad, India.
 
@@ -7,7 +8,18 @@ Built at the Srujana Center for Innovation, LV Prasad Eye Institute, Hyderabad, 
 This software is covered by the MIT License (see `license.txt`).
 
 ## Version
-Current release: **3.0.0**
+Current release: **4.0.0**
+
+## What's New in 4.0.0
+- **RetinaCamera class** — dedicated camera abstraction with lifecycle management, hardware error handling, and CLAHE contrast enhancement for improved image quality.
+- **Grad-CAM explainability** — visual saliency maps overlaid on retinal images to highlight regions driving the DR classification decision.
+- **Live inference progress** — real-time grading status streamed to the UI via background executor, with clear error and completion feedback.
+- **Client-side focus gating** — the capture button is only enabled after the preview frame passes a sharpness threshold; the backend re-validates focus before saving the image.
+- **Picamera2 preview endpoint** — `/preview-frame` streams JPEG frames from the libcamera stack for low-latency live preview.
+- **Tailwind CSS UI** — all HTML templates rebuilt with Tailwind CSS for a modern, responsive interface.
+- **Modernised screens** — start screen and action buttons redesigned with consistent icon-based layout.
+- **Security hardening** — sanitised error messages, strengthened `serve_image` path validation to prevent directory traversal.
+- **Python 3.11 type hints & docstrings** — processing and module files fully annotated for maintainability.
 
 ## Supported Platform
 - Raspberry Pi 4

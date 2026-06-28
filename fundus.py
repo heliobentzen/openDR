@@ -450,7 +450,7 @@ def run_explanation_job(job_id, image_path):
     try:
         grade_with_explanation(image_path, status_callback=status_callback)
     except RuntimeError as exc:
-        app.logger.exception("Inference job %s failed during report generation.", job_id)
+        app.logger.exception("Inference job %s failed during processing.", job_id)
         fail_inference_job(job_id, f"GRAD-CAM ERROR: {exc}")
     except OSError as exc:  # pragma: no cover - runtime safeguards
         app.logger.exception("Inference job %s failed with OSError.", job_id)

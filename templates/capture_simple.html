@@ -193,7 +193,7 @@
 
     const context = canvas.getContext('2d', { willReadFrequently: true });
     const PREVIEW_UPDATE_INTERVAL_MS = 500;
-    const INFERENCE_POLL_INTERVAL_MS = Number.parseInt(
+    const INFERENCE_POLL_INTERVAL_MS = parseInt(
       workflowPanel.dataset.pollIntervalMs || '1000',
       10,
     );
@@ -369,7 +369,7 @@
           cache: 'no-store',
         });
         if (!response.ok) {
-          throw new Error(`INFERENCE STATUS UNAVAILABLE (${response.status} ${response.statusText})`);
+          throw new Error(`Status da inferência indisponível (${response.status} ${response.statusText})`);
         }
         const payload = await response.json();
         renderInferenceStatus(payload);

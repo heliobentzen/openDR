@@ -34,7 +34,7 @@
           src="{{ url_for('static', filename=o + '.jpg') }}"
           alt=""
           aria-hidden="true"
-          class="w-9 h-9 rounded-lg object-cover {% if o == 'Click' %}opacity-90{% else %}opacity-70 group-hover:opacity-90{% endif %}"
+          class="w-9 h-9 rounded-lg object-contain {% if o == 'Click' %}opacity-90{% else %}opacity-70 group-hover:opacity-90{% endif %}"
         >
         {% endif %}
         <span>{% if o == "Click" %}Capturar{% elif o == "Explain" %}Relatório{% elif o == "Shut" %}Desligar{% elif o == "Switch" %}Trocar{% elif o == "Vid" %}Gravar{% else %}{{ o }}{% endif %}</span>

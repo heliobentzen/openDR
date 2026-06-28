@@ -107,9 +107,7 @@ def grade_with_explanation(
             processed_image, processed_path, model_path=model_path
         )
     except (RuntimeError, ValueError) as exc:
-        raise RuntimeError(
-            f"Grad-CAM explanation step failed for {processed_path!r}: {exc}"
-        ) from exc
+        raise RuntimeError(f"Grad-CAM explanation step failed: {exc}") from exc
 
     return {
         "theia_grade": theia_grade,

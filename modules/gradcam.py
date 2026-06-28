@@ -434,9 +434,12 @@ def run_gradcam(
     # image extension, and its parent directory must be a real directory.
     p = Path(source_path).resolve()
     if not p.is_file():
-        raise ValueError(f"source_path does not point to an existing file: {source_path!r}")
+        raise ValueError("source_path does not point to an existing image file.")
     if p.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
-        raise ValueError(f"Unexpected file extension for source_path: {p.suffix!r}")
+        raise ValueError(
+            f"Unexpected file extension {p.suffix!r} for source_path; "
+            "expected .jpg, .jpeg, or .png."
+        )
 
     # Derive output paths – both are forced into the same directory as the
     # source so they cannot escape to a different filesystem location.

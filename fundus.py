@@ -195,8 +195,14 @@ def serve_image(filename):
     # the images directory (e.g. "../../etc/passwd" → rejected).
     safe_name = Path(filename).name
     if safe_name != filename:
+        app.logger.warning("Rejected path-traversal attempt in /images: %s", filename)
         abort(400)
     images_dir = BASE_FOLDER / "images"
+    # Confirm the resolved path stays inside the images directory.
+    resolved = (images_dir / safe_name).resolve()
+    if not str(resolved).startswith(str(images_dir.resolve())):
+        app.logger.warning("Rejected out-of-directory request in /images: %s", filename)
+        abort(400)
     return send_from_directory(str(images_dir), safe_name)
 
 

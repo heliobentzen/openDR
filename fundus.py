@@ -7,13 +7,14 @@
 import os
 import re
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from uuid import uuid4
 
 import cv2
-from flask import Flask, abort, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, Response, abort, redirect, render_template, request, send_from_directory, url_for
 
 from Fundus_Cam import Fundus_Cam
 from modules.process import grade, grade_with_explanation
@@ -27,6 +28,14 @@ app = Flask(__name__)
 BASE_FOLDER = Path(os.environ.get("OPEN_DR_BASE", "/home/pi/openDR")).resolve()
 TOKENS = ["Flip", "Vid", "Click", "Switch", "Grade", "Explain", "Shut"]
 PATIENT_ID_RE = re.compile(r"^[A-Z0-9_-]{1,64}$")
+FOCUS_WARNING_MESSAGE = "Posicione o paciente e foque antes de capturar"
+MIN_FOCUS_SCORE = 140
+DARK_PIXEL_THRESHOLD = 58
+MIN_DARK_PIXELS = 120
+MIN_DARK_DENSITY = 0.20
+MIN_DARK_RATIO = 0.01
+MAX_DARK_RATIO = 0.42
+PREVIEW_MIN_INTERVAL_S = 0.20
 
 orangeyellow = 14
 bluegreen = 15
@@ -52,6 +61,8 @@ class CameraSessionState:
 
 
 state = CameraSessionState()
+preview_rate_lock = Lock()
+preview_last_request = {}
 
 
 @app.route("/")
@@ -86,10 +97,14 @@ def captureSimpleFunc():
     d = request.form["d"]
 
     if d == "Click":
+        if request.form.get("focus_ok") != "1":
+            return render_capture(FOCUS_WARNING_MESSAGE)
         with state.lock:
             if state.camera is None or not state.patient_id:
                 return render_capture("NO ACTIVE CAPTURE SESSION")
             image = state.camera.capture()
+            if not is_eye_in_focus(image):
+                return render_capture(FOCUS_WARNING_MESSAGE)
             state.last_img = save_captured_images(state.patient_id, image)
         return render_capture()
 
@@ -164,6 +179,62 @@ def captureSimpleFunc():
     return render_capture()
 
 
+@app.route("/preview-frame", methods=["GET"])
+def preview_frame():
+    client_key = request.remote_addr or "unknown"
+    now = time.monotonic()
+    with preview_rate_lock:
+        last_request = preview_last_request.get(client_key, 0.0)
+        if now - last_request < PREVIEW_MIN_INTERVAL_S:
+            abort(429)
+        preview_last_request[client_key] = now
+
+    with state.lock:
+        if state.camera is None:
+            abort(404)
+        preview = state.camera.capture_preview()
+    response = Response(preview.tobytes(), mimetype="image/jpeg")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+def is_eye_in_focus(image_buffer):
+    gray_frame = cv2.imdecode(image_buffer, cv2.IMREAD_GRAYSCALE)
+    if gray_frame is None:
+        return False
+
+    resized = cv2.resize(gray_frame, (176, 132), interpolation=cv2.INTER_AREA)
+    focus_score = cv2.Laplacian(resized, cv2.CV_64F).var()
+
+    _, dark_regions = cv2.threshold(
+        resized,
+        DARK_PIXEL_THRESHOLD,
+        255,
+        cv2.THRESH_BINARY_INV,
+    )
+    dark_pixel_count = int(cv2.countNonZero(dark_regions))
+    if dark_pixel_count < MIN_DARK_PIXELS:
+        return False
+
+    contours, _ = cv2.findContours(dark_regions, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return False
+
+    largest_contour = max(contours, key=cv2.contourArea)
+    contour_area = cv2.contourArea(largest_contour)
+    x, y, width, height = cv2.boundingRect(largest_contour)
+    bounding_area = max(1, width * height)
+    dark_density = contour_area / bounding_area
+    dark_ratio = dark_pixel_count / float(resized.shape[0] * resized.shape[1])
+    has_eye_contour = (
+        dark_density > MIN_DARK_DENSITY
+        and dark_ratio > MIN_DARK_RATIO
+        and dark_ratio < MAX_DARK_RATIO
+    )
+    return focus_score >= MIN_FOCUS_SCORE and has_eye_contour
+
+
 def render_capture(
     grade_message="",
     overlay_filename=None,
@@ -176,6 +247,7 @@ def render_capture(
         "capture_simple.html",
         params=TOKENS,
         grades={"grade": grade_message},
+        focus_warning_message=FOCUS_WARNING_MESSAGE,
         overlay_filename=overlay_filename,
         json_filename=json_filename,
         dr_label=dr_label,

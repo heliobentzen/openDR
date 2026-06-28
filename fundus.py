@@ -278,7 +278,7 @@ def format_grade_display(grade_value):
 
 def create_inference_job(image_path):
     raw_filename = Path(image_path).name
-    job_id = uuid4().hex
+    job_id = str(uuid4())
     steps = {
         key: {
             "key": key,
@@ -443,6 +443,7 @@ def run_explanation_job(job_id, image_path):
     except Exception as exc:  # pragma: no cover - defensive runtime fallback
         app.logger.exception("Inference job %s failed unexpectedly.", job_id)
         fail_inference_job(job_id, f"INFERENCE ERROR: {exc}")
+        raise
 
 
 @app.route("/images/<path:filename>")

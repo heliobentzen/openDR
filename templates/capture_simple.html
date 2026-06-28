@@ -147,7 +147,6 @@
       canvas: document.getElementById('analysis-canvas'),
       overlay: document.getElementById('focus-overlay'),
       captureButton: document.getElementById('capture-button'),
-      explainButton: document.getElementById('explain-button'),
       focusInput: document.getElementById('focus-ok-input'),
       previewStatus: document.getElementById('preview-status'),
       workflowPanel: document.getElementById('workflow-panel'),
@@ -171,7 +170,6 @@
       canvas,
       overlay,
       captureButton,
-      explainButton,
       focusInput,
       previewStatus,
       workflowPanel,
@@ -185,6 +183,7 @@
       reportConfidence,
       reportLesions,
     } = elements;
+    const explainButton = document.getElementById('explain-button');
 
     const context = canvas.getContext('2d', { willReadFrequently: true });
     const PREVIEW_UPDATE_INTERVAL_MS = 500;
@@ -253,6 +252,16 @@
       stepElements.icon.textContent = '○';
     };
 
+    const getStepStatusLabel = (status) => {
+      const labels = {
+        completed: 'Concluída',
+        running: 'Em andamento',
+        failed: 'Falhou',
+        pending: 'Aguardando início',
+      };
+      return labels[status] || labels.pending;
+    };
+
     const renderStep = (step) => {
       const stepElements = workflowSteps[step.key];
       if (!stepElements) {
@@ -275,15 +284,7 @@
         stepElements.icon.textContent = '!';
       }
 
-      stepElements.status.textContent = step.detail || (
-        step.status === 'completed'
-          ? 'Concluída'
-          : step.status === 'running'
-            ? 'Em andamento'
-            : step.status === 'failed'
-              ? 'Falhou'
-              : 'Aguardando início'
-      );
+      stepElements.status.textContent = step.detail || getStepStatusLabel(step.status);
 
       if (step.image_url) {
         stepElements.image.src = step.image_url;

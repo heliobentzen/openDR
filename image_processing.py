@@ -1,4 +1,22 @@
+"""
+Interactive demo script for the openDR fundus image-extraction pipeline.
+
+Displays each intermediate result in a resized window so the output of
+:func:`~modules.extract.extract_circles`, :func:`~modules.extract.erode_thresh`,
+and :func:`~modules.extract.ellipse_fit` can be inspected visually without
+running the full grading pipeline.
+
+Run directly::
+
+    python image_processing.py [path/to/image.jpg]
+
+Requires the ``imutils`` package (``pip install imutils``).
+"""
+from __future__ import annotations
+
 import cv2
+
+from modules.extract import ellipse_fit, erode_thresh, extract_circles
 
 
 def _load_imutils():
@@ -11,10 +29,22 @@ def _load_imutils():
 
 imutils = _load_imutils()
 
-from modules.extract import ellipse_fit, erode_thresh, extract_circles
 
+def main(image_path: str = "owl1.jpg") -> None:
+    """Run the extraction pipeline and display each stage in a window.
 
-def main(image_path="owl1.jpg"):
+    Parameters
+    ----------
+    image_path:
+        Path to a fundus JPEG captured by the OWL camera.
+
+    Raises
+    ------
+    ImportError
+        If the ``imutils`` package is not installed.
+    FileNotFoundError
+        If *image_path* cannot be read by OpenCV.
+    """
     if imutils is None:
         raise ImportError("imutils is required to run image_processing.py")
 
@@ -40,3 +70,4 @@ def main(image_path="owl1.jpg"):
 
 if __name__ == "__main__":
     main()
+

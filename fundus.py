@@ -452,13 +452,15 @@ def run_explanation_job(job_id, image_path):
     except RuntimeError as exc:
         app.logger.exception("Inference job %s failed during report generation.", job_id)
         fail_inference_job(job_id, f"GRAD-CAM ERROR: {exc}")
-    except (OSError, ValueError, KeyError) as exc:  # pragma: no cover - runtime safeguards
-        app.logger.exception(
-            "Inference job %s failed with %s.",
-            job_id,
-            type(exc).__name__,
-        )
-        fail_inference_job(job_id, f"INFERENCE ERROR: {exc}")
+    except OSError as exc:  # pragma: no cover - runtime safeguards
+        app.logger.exception("Inference job %s failed with OSError.", job_id)
+        fail_inference_job(job_id, f"FILE ERROR: {exc}")
+    except ValueError as exc:  # pragma: no cover - runtime safeguards
+        app.logger.exception("Inference job %s failed with ValueError.", job_id)
+        fail_inference_job(job_id, f"DATA ERROR: {exc}")
+    except KeyError as exc:  # pragma: no cover - runtime safeguards
+        app.logger.exception("Inference job %s failed with KeyError.", job_id)
+        fail_inference_job(job_id, f"REPORT ERROR: missing field {exc}")
 
 
 @app.route("/images/<path:filename>")

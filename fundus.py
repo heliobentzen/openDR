@@ -92,6 +92,7 @@ def my_form_post():
     with state.lock:
         state.stop_camera()
         state.patient_id = patient_id
+        state.inference_job_id = None
         state.last_img = None
         state.camera = Fundus_Cam()
     return redirect(url_for("captureSimpleFunc"))

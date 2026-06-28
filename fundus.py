@@ -13,7 +13,7 @@ from threading import Lock
 from uuid import uuid4
 
 import cv2
-from flask import Flask, abort, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, Response, abort, redirect, render_template, request, send_from_directory, url_for
 
 from Fundus_Cam import Fundus_Cam
 from modules.process import grade, grade_with_explanation
@@ -86,12 +86,26 @@ def captureSimpleFunc():
     d = request.form["d"]
 
     if d == "Click":
+        if request.form.get("focus_ok") != "1":
+            return render_capture("POSICIONE O PACIENTE E FOQUE ANTES DE CAPTURAR")
         with state.lock:
             if state.camera is None or not state.patient_id:
                 return render_capture("NO ACTIVE CAPTURE SESSION")
             image = state.camera.capture()
             state.last_img = save_captured_images(state.patient_id, image)
         return render_capture()
+
+
+@app.route("/preview-frame", methods=["GET"])
+def preview_frame():
+        with state.lock:
+            if state.camera is None:
+                abort(404)
+            preview = state.camera.capture_preview()
+        response = Response(preview.tobytes(), mimetype="image/jpeg")
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        return response
 
     if d == "Flip":
         with state.lock:

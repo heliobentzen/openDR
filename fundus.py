@@ -95,18 +95,6 @@ def captureSimpleFunc():
             state.last_img = save_captured_images(state.patient_id, image)
         return render_capture()
 
-
-@app.route("/preview-frame", methods=["GET"])
-def preview_frame():
-        with state.lock:
-            if state.camera is None:
-                abort(404)
-            preview = state.camera.capture_preview()
-        response = Response(preview.tobytes(), mimetype="image/jpeg")
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        response.headers["Pragma"] = "no-cache"
-        return response
-
     if d == "Flip":
         with state.lock:
             if state.camera is None:
@@ -176,6 +164,18 @@ def preview_frame():
         return render_capture()
 
     return render_capture()
+
+
+@app.route("/preview-frame", methods=["GET"])
+def preview_frame():
+    with state.lock:
+        if state.camera is None:
+            abort(404)
+        preview = state.camera.capture_preview()
+    response = Response(preview.tobytes(), mimetype="image/jpeg")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 def render_capture(

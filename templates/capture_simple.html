@@ -142,44 +142,49 @@
 </body>
 <script>
   (() => {
-    const preview = document.getElementById('preview-frame');
-    const canvas = document.getElementById('analysis-canvas');
-    const overlay = document.getElementById('focus-overlay');
-    const captureButton = document.getElementById('capture-button');
-    const explainButton = document.getElementById('explain-button');
-    const focusInput = document.getElementById('focus-ok-input');
-    const previewStatus = document.getElementById('preview-status');
-    const workflowPanel = document.getElementById('workflow-panel');
-    const workflowMessage = document.getElementById('workflow-message');
-    const workflowLiveRegion = document.getElementById('workflow-live-region');
-    const gradeDisplay = document.getElementById('grade-display');
-    const reportPanel = document.getElementById('report-panel');
-    const reportImage = document.getElementById('report-image');
-    const reportDownload = document.getElementById('report-download');
-    const reportLabel = document.getElementById('report-label');
-    const reportConfidence = document.getElementById('report-confidence');
-    const reportLesions = document.getElementById('report-lesions');
+    const elements = {
+      preview: document.getElementById('preview-frame'),
+      canvas: document.getElementById('analysis-canvas'),
+      overlay: document.getElementById('focus-overlay'),
+      captureButton: document.getElementById('capture-button'),
+      explainButton: document.getElementById('explain-button'),
+      focusInput: document.getElementById('focus-ok-input'),
+      previewStatus: document.getElementById('preview-status'),
+      workflowPanel: document.getElementById('workflow-panel'),
+      workflowMessage: document.getElementById('workflow-message'),
+      workflowLiveRegion: document.getElementById('workflow-live-region'),
+      gradeDisplay: document.getElementById('grade-display'),
+      reportPanel: document.getElementById('report-panel'),
+      reportImage: document.getElementById('report-image'),
+      reportDownload: document.getElementById('report-download'),
+      reportLabel: document.getElementById('report-label'),
+      reportConfidence: document.getElementById('report-confidence'),
+      reportLesions: document.getElementById('report-lesions'),
+    };
 
-    if (
-      !preview
-      || !canvas
-      || !overlay
-      || !captureButton
-      || !focusInput
-      || !previewStatus
-      || !workflowPanel
-      || !workflowMessage
-      || !workflowLiveRegion
-      || !gradeDisplay
-      || !reportPanel
-      || !reportImage
-      || !reportDownload
-      || !reportLabel
-      || !reportConfidence
-      || !reportLesions
-    ) {
+    if (Object.values(elements).some((element) => !element)) {
       return;
     }
+
+    const {
+      preview,
+      canvas,
+      overlay,
+      captureButton,
+      explainButton,
+      focusInput,
+      previewStatus,
+      workflowPanel,
+      workflowMessage,
+      workflowLiveRegion,
+      gradeDisplay,
+      reportPanel,
+      reportImage,
+      reportDownload,
+      reportLabel,
+      reportConfidence,
+      reportLesions,
+    } = elements;
 
     const context = canvas.getContext('2d', { willReadFrequently: true });
     const PREVIEW_UPDATE_INTERVAL_MS = 500;
@@ -371,10 +376,10 @@
         return;
       }
 
+      stopInferencePolling();
       setWorkflowMessage('Acompanhando a inferência em tempo real...');
       setExplainState(true);
       pollInferenceStatus();
-      stopInferencePolling();
       inferencePollTimer = setInterval(pollInferenceStatus, INFERENCE_POLL_INTERVAL_MS);
     };
 

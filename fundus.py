@@ -163,7 +163,7 @@ def captureSimpleFunc():
         with state.lock:
             state.inference_job_id = job_id
 
-        Thread(target=run_explanation_job, args=(job_id, last_img), daemon=True).start()
+        Thread(target=run_explanation_job, args=(job_id, last_img)).start()
         return render_capture("PROCESSANDO...", inference_job_id=job_id)
 
     if d == "Switch":
@@ -270,7 +270,7 @@ def render_capture(
     )
 
 
-def format_grade_message(grade_value):
+def format_grade_display(grade_value):
     if grade_value is None:
         return ""
     return str(grade_value)[:4]
@@ -334,7 +334,7 @@ def advance_inference_job(job_id, completed_step, next_step=None, **payload):
             completed_state["detail"] = "Ruído removido e imagem preparada."
             job["message"] = "Pré-processamento concluído."
         elif completed_step == "inference":
-            job["grade_message"] = format_grade_message(payload.get("theia_grade"))
+            job["grade_message"] = format_grade_display(payload.get("theia_grade"))
             completed_state["detail"] = (
                 f"Resultado do modelo: {job['grade_message'] or 'N/A'}"
             )
@@ -343,7 +343,7 @@ def advance_inference_job(job_id, completed_step, next_step=None, **payload):
             gradcam_record = payload["gradcam"]
             overlay_filename = Path(gradcam_record["gradcam_overlay"]).name
             json_filename = Path(gradcam_record["gradcam_audit_json"]).name
-            job["grade_message"] = format_grade_message(payload.get("theia_grade"))
+            job["grade_message"] = format_grade_display(payload.get("theia_grade"))
             completed_state["image_filename"] = overlay_filename
             completed_state["detail"] = "Relatório final disponível."
             job["result"] = {
@@ -438,8 +438,10 @@ def run_explanation_job(job_id, image_path):
     try:
         grade_with_explanation(image_path, status_callback=status_callback)
     except RuntimeError as exc:
+        app.logger.exception("Inference job %s failed during report generation.", job_id)
         fail_inference_job(job_id, f"GRAD-CAM ERROR: {exc}")
     except Exception as exc:  # pragma: no cover - defensive runtime fallback
+        app.logger.exception("Inference job %s failed unexpectedly.", job_id)
         fail_inference_job(job_id, f"INFERENCE ERROR: {exc}")
 
 

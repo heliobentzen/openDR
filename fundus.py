@@ -8,13 +8,14 @@ import os
 import re
 import subprocess
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from uuid import uuid4
 
 import cv2
-from flask import Flask, Response, abort, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 from Fundus_Cam import Fundus_Cam
 from modules.process import grade, grade_with_explanation
@@ -36,6 +37,12 @@ MIN_DARK_DENSITY = 0.20
 MIN_DARK_RATIO = 0.01
 MAX_DARK_RATIO = 0.42
 PREVIEW_MIN_INTERVAL_S = 0.20
+INFERENCE_STEPS = (
+    ("received", "Imagem recebida"),
+    ("preprocessing", "Pré-processamento (limpeza de ruído)"),
+    ("inference", "Inferência do modelo"),
+    ("report", "Geração do relatório"),
+)
 
 orangeyellow = 14
 bluegreen = 15
@@ -48,9 +55,11 @@ class CameraSessionState:
         self.lock = Lock()
         self.camera = None
         self.last_img = None
+        self.inference_job_id = None
         self.patient_id = ""
 
     def reset(self):
+        self.inference_job_id = None
         self.patient_id = ""
         self.last_img = None
 
@@ -63,6 +72,8 @@ class CameraSessionState:
 state = CameraSessionState()
 preview_rate_lock = Lock()
 preview_last_request = {}
+inference_jobs_lock = Lock()
+inference_jobs = {}
 
 
 @app.route("/")
@@ -106,6 +117,7 @@ def captureSimpleFunc():
             if not is_eye_in_focus(image):
                 return render_capture(FOCUS_WARNING_MESSAGE)
             state.last_img = save_captured_images(state.patient_id, image)
+            state.inference_job_id = None
         return render_capture()
 
     if d == "Flip":
@@ -123,6 +135,7 @@ def captureSimpleFunc():
             if not state.camera.wait_for_capture(timeout=5):
                 return render_capture("CAPTURE TIMEOUT - RETRY OR CHECK CAMERA")
             state.last_img = save_captured_images(state.patient_id, state.camera.images)
+            state.inference_job_id = None
         return render_capture()
 
     if d == "Grade":
@@ -138,30 +151,19 @@ def captureSimpleFunc():
     if d == "Explain":
         with state.lock:
             last_img = state.last_img
+            active_job_id = state.inference_job_id
         if last_img is None:
             return render_capture("NO IMAGE SPECIFIED")
 
-        try:
-            result = grade_with_explanation(last_img)
-        except RuntimeError as exc:
-            return render_capture(f"GRAD-CAM ERROR: {exc}")
+        if active_job_id and is_inference_job_running(active_job_id):
+            return render_capture("INFERENCE IN PROGRESS", inference_job_id=active_job_id)
 
-        grade_result = str(result["theia_grade"])[:4]
-        gradcam_record = result["gradcam"]
-        overlay_filename = Path(gradcam_record["gradcam_overlay"]).name
-        json_filename = Path(gradcam_record["gradcam_audit_json"]).name
-        dr_label = gradcam_record["predicted_dr_grade"]["label"]
-        confidence = gradcam_record["predicted_dr_grade"]["confidence"]
-        lesion_count = len(gradcam_record["lesion_regions"])
-        print(f"Grad-CAM complete: lesions detected={lesion_count}")
-        return render_capture(
-            grade_result,
-            overlay_filename=overlay_filename,
-            json_filename=json_filename,
-            dr_label=dr_label,
-            confidence=confidence,
-            lesion_count=lesion_count,
-        )
+        job_id = create_inference_job(last_img)
+        with state.lock:
+            state.inference_job_id = job_id
+
+        Thread(target=run_explanation_job, args=(job_id, last_img), daemon=True).start()
+        return render_capture("PROCESSANDO...", inference_job_id=job_id)
 
     if d == "Switch":
         with state.lock:
@@ -177,6 +179,15 @@ def captureSimpleFunc():
         return render_capture()
 
     return render_capture()
+
+
+@app.route("/inference-status/<job_id>", methods=["GET"])
+def inference_status(job_id):
+    job = get_inference_job(job_id)
+    if job is None:
+        return jsonify({"error": "INFERENCE JOB NOT FOUND"}), 404
+
+    return jsonify(serialize_inference_job(job))
 
 
 @app.route("/preview-frame", methods=["GET"])
@@ -242,6 +253,7 @@ def render_capture(
     dr_label=None,
     confidence=None,
     lesion_count=None,
+    inference_job_id=None,
 ):
     return render_template(
         "capture_simple.html",
@@ -253,7 +265,181 @@ def render_capture(
         dr_label=dr_label,
         confidence=confidence,
         lesion_count=lesion_count,
+        inference_job_id=inference_job_id,
     )
+
+
+def format_grade_message(grade_value):
+    if grade_value is None:
+        return ""
+    return str(grade_value)[:4]
+
+
+def create_inference_job(image_path):
+    raw_filename = Path(image_path).name
+    job_id = uuid4().hex
+    steps = {
+        key: {
+            "key": key,
+            "label": label,
+            "status": "pending",
+            "detail": "",
+            "image_filename": raw_filename if key == "received" else None,
+        }
+        for key, label in INFERENCE_STEPS
+    }
+    steps["received"]["status"] = "completed"
+    steps["preprocessing"]["status"] = "running"
+
+    with inference_jobs_lock:
+        inference_jobs[job_id] = {
+            "job_id": job_id,
+            "status": "running",
+            "current_step": "preprocessing",
+            "message": "Imagem enviada para a fila de inferência.",
+            "error": "",
+            "grade_message": "",
+            "steps": steps,
+            "result": {},
+        }
+
+    return job_id
+
+
+def is_inference_job_running(job_id):
+    with inference_jobs_lock:
+        job = inference_jobs.get(job_id)
+        return job is not None and job["status"] == "running"
+
+
+def get_inference_job(job_id):
+    with inference_jobs_lock:
+        job = inference_jobs.get(job_id)
+        return deepcopy(job) if job is not None else None
+
+
+def advance_inference_job(job_id, completed_step, next_step=None, **payload):
+    with inference_jobs_lock:
+        job = inference_jobs.get(job_id)
+        if job is None:
+            return
+
+        completed_state = job["steps"][completed_step]
+        completed_state["status"] = "completed"
+
+        processed_path = payload.get("processed_path")
+        if completed_step == "preprocessing" and processed_path:
+            completed_state["image_filename"] = Path(processed_path).name
+            completed_state["detail"] = "Ruído removido e imagem preparada."
+            job["message"] = "Pré-processamento concluído."
+        elif completed_step == "inference":
+            job["grade_message"] = format_grade_message(payload.get("theia_grade"))
+            completed_state["detail"] = (
+                f"Resultado do modelo: {job['grade_message'] or 'N/A'}"
+            )
+            job["message"] = "Inferência do modelo concluída."
+        elif completed_step == "report":
+            gradcam_record = payload["gradcam"]
+            overlay_filename = Path(gradcam_record["gradcam_overlay"]).name
+            json_filename = Path(gradcam_record["gradcam_audit_json"]).name
+            job["grade_message"] = format_grade_message(payload.get("theia_grade"))
+            completed_state["image_filename"] = overlay_filename
+            completed_state["detail"] = "Relatório final disponível."
+            job["result"] = {
+                "overlay_filename": overlay_filename,
+                "json_filename": json_filename,
+                "dr_label": gradcam_record["predicted_dr_grade"]["label"],
+                "confidence": gradcam_record["predicted_dr_grade"]["confidence"],
+                "lesion_count": len(gradcam_record["lesion_regions"]),
+            }
+            job["message"] = "Relatório final gerado."
+
+        if next_step is not None:
+            job["current_step"] = next_step
+            job["steps"][next_step]["status"] = "running"
+        else:
+            job["current_step"] = None
+            job["status"] = "completed"
+
+
+def fail_inference_job(job_id, error_message):
+    with inference_jobs_lock:
+        job = inference_jobs.get(job_id)
+        if job is None:
+            return
+
+        current_step = job.get("current_step")
+        if current_step:
+            job["steps"][current_step]["status"] = "failed"
+        job["status"] = "failed"
+        job["error"] = error_message
+        job["message"] = error_message
+        job["current_step"] = None
+
+
+def serialize_inference_job(job):
+    result = job["result"]
+    serialized_steps = []
+    for step_key, step_label in INFERENCE_STEPS:
+        step = job["steps"][step_key]
+        image_filename = step.get("image_filename")
+        serialized_steps.append(
+            {
+                "key": step_key,
+                "label": step_label,
+                "status": step["status"],
+                "detail": step.get("detail", ""),
+                "image_url": (
+                    url_for("serve_image", filename=image_filename)
+                    if image_filename
+                    else None
+                ),
+            }
+        )
+
+    overlay_filename = result.get("overlay_filename")
+    json_filename = result.get("json_filename")
+    return {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "current_step": job["current_step"],
+        "message": job["message"],
+        "error": job["error"],
+        "grade_message": job["grade_message"],
+        "steps": serialized_steps,
+        "result": {
+            "overlay_image_url": (
+                url_for("serve_image", filename=overlay_filename)
+                if overlay_filename
+                else None
+            ),
+            "json_url": (
+                url_for("serve_image", filename=json_filename)
+                if json_filename
+                else None
+            ),
+            "dr_label": result.get("dr_label"),
+            "confidence": result.get("confidence"),
+            "lesion_count": result.get("lesion_count"),
+        },
+    }
+
+
+def run_explanation_job(job_id, image_path):
+    def status_callback(step_name, **payload):
+        if step_name == "preprocessing":
+            advance_inference_job(job_id, "preprocessing", next_step="inference", **payload)
+        elif step_name == "inference":
+            advance_inference_job(job_id, "inference", next_step="report", **payload)
+        elif step_name == "report":
+            advance_inference_job(job_id, "report", **payload)
+
+    try:
+        grade_with_explanation(image_path, status_callback=status_callback)
+    except RuntimeError as exc:
+        fail_inference_job(job_id, f"GRAD-CAM ERROR: {exc}")
+    except Exception as exc:  # pragma: no cover - defensive runtime fallback
+        fail_inference_job(job_id, f"INFERENCE ERROR: {exc}")
 
 
 @app.route("/images/<path:filename>")

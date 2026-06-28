@@ -4,14 +4,16 @@
 ##  Authors: Ayush Yadav, Devesh Jain, Ebin Philip, Dhruv Joshi      ########
 ##############################################################################
 
+import atexit
 import os
 import re
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Lock
 from uuid import uuid4
 
 import cv2
@@ -74,6 +76,12 @@ preview_rate_lock = Lock()
 preview_last_request = {}
 inference_jobs_lock = Lock()
 inference_jobs = {}
+inference_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="inference")
+
+
+@atexit.register
+def shutdown_inference_executor():
+    inference_executor.shutdown(wait=False, cancel_futures=False)
 
 
 @app.route("/")
@@ -163,7 +171,7 @@ def captureSimpleFunc():
         with state.lock:
             state.inference_job_id = job_id
 
-        Thread(target=run_explanation_job, args=(job_id, last_img)).start()
+        inference_executor.submit(run_explanation_job, job_id, last_img)
         return render_capture("PROCESSANDO...", inference_job_id=job_id)
 
     if d == "Switch":
@@ -440,10 +448,9 @@ def run_explanation_job(job_id, image_path):
     except RuntimeError as exc:
         app.logger.exception("Inference job %s failed during report generation.", job_id)
         fail_inference_job(job_id, f"GRAD-CAM ERROR: {exc}")
-    except Exception as exc:  # pragma: no cover - defensive runtime fallback
+    except (OSError, ValueError, KeyError) as exc:  # pragma: no cover - runtime safeguards
         app.logger.exception("Inference job %s failed unexpectedly.", job_id)
         fail_inference_job(job_id, f"INFERENCE ERROR: {exc}")
-        raise
 
 
 @app.route("/images/<path:filename>")

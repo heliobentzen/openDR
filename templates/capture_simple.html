@@ -41,6 +41,12 @@
     <div class="flex-1 flex items-center justify-center bg-black relative">
       <img id="preview-frame" alt="Pré-visualização da retina" class="w-full h-full object-contain">
       <canvas id="analysis-canvas" class="hidden"></canvas>
+      <p
+        id="preview-status"
+        class="sr-only"
+        role="status"
+        aria-live="polite"
+      ></p>
       <div
         id="focus-overlay"
         class="absolute inset-0 flex items-center justify-center bg-black/65 p-6 text-center"
@@ -87,13 +93,14 @@
     const overlay = document.getElementById('focus-overlay');
     const captureButton = document.getElementById('capture-button');
     const focusInput = document.getElementById('focus-ok-input');
+    const previewStatus = document.getElementById('preview-status');
 
-    if (!preview || !canvas || !overlay || !captureButton || !focusInput) {
+    if (!preview || !canvas || !overlay || !captureButton || !focusInput || !previewStatus) {
       return;
     }
 
     const context = canvas.getContext('2d', { willReadFrequently: true });
-    const PREVIEW_UPDATE_INTERVAL_MS = 350;
+    const PREVIEW_UPDATE_INTERVAL_MS = 500;
     const MIN_FOCUS_SCORE = 140;
     const DARK_PIXEL_THRESHOLD = 58;
     const MIN_DARK_PIXELS = 120;
@@ -180,6 +187,7 @@
       try {
         const response = await fetch(`/preview-frame?t=${Date.now()}`, { cache: 'no-store' });
         if (!response.ok) {
+          previewStatus.textContent = 'Pré-visualização indisponível no momento.';
           setFocusState(false);
           return;
         }
@@ -196,8 +204,11 @@
           };
           preview.src = objectUrl;
         });
+        previewStatus.textContent = '';
         setFocusState(detectEyeInFocus());
-      } catch (_) {
+      } catch (error) {
+        console.warn('Falha ao atualizar pré-visualização da câmera:', error);
+        previewStatus.textContent = 'Falha ao carregar pré-visualização da câmera.';
         setFocusState(false);
       }
     };

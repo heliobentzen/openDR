@@ -50,6 +50,15 @@ class Fundus_Cam(object):
         return np.frombuffer(image_bytes.tobytes(), dtype=np.uint8)
 
     def capture_preview(self, max_dimension=640, jpeg_quality=80):
+        """Capture a reduced-size preview frame and return it as a JPEG buffer.
+
+        Args:
+            max_dimension: Maximum width or height for the preview image.
+            jpeg_quality: JPEG quality used during encoding (0-100).
+
+        Returns:
+            NumPy uint8 array containing encoded JPEG bytes.
+        """
         frame = self.camera.capture_array()
         if self.flip_state:
             frame = cv2.flip(frame, 0)

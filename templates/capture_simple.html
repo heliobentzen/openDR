@@ -11,7 +11,7 @@
 
   <aside class="bg-slate-900 border-r border-slate-700 flex flex-col items-center gap-2 p-3 w-28 shrink-0">
     <p class="text-slate-500 text-[10px] uppercase tracking-widest mb-1">Controls</p>
-    {% set has_icon = ["Flip", "Vid", "Click", "Switch", "Shut"] %}
+    {% set icon_button_names = ["Flip", "Vid", "Click", "Switch", "Shut"] %}
     {% for o in params %}
     <form method="post" class="w-full">
       {% if o == "Click" %}
@@ -23,13 +23,13 @@
         {% if o == "Click" %}id="capture-button"{% endif %}
         {% if o == "Explain" %}id="explain-button"{% endif %}
         {% if o == "Click" %}disabled aria-disabled="true"{% endif %}
-        class="w-full flex flex-col items-center gap-1.5 py-2.5 px-1 rounded-xl border font-semibold text-[11px] text-center cursor-pointer select-none transition-all duration-150 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900
+        class="group w-full flex flex-col items-center gap-1.5 py-2.5 px-1 rounded-xl border font-semibold text-[11px] text-center cursor-pointer select-none transition-all duration-150 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900
           {% if o == "Click" %}bg-amber-500 border-amber-400 text-slate-900 hover:bg-amber-400 shadow-md shadow-amber-500/20 hover:shadow-amber-400/30 focus-visible:ring-amber-400 disabled:bg-slate-700 disabled:border-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed disabled:shadow-none disabled:scale-100
           {% elif o == "Explain" %}bg-teal-700 border-teal-600 text-white hover:bg-teal-600 shadow-md shadow-teal-700/20 hover:shadow-teal-600/30 focus-visible:ring-teal-400
           {% elif o == "Shut" %}bg-rose-950 border-rose-800 text-rose-300 hover:bg-rose-900 hover:border-rose-700 focus-visible:ring-rose-500
           {% else %}bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 hover:border-slate-600 focus-visible:ring-slate-400{% endif %}"
       >
-        {% if o in has_icon %}
+        {% if o in icon_button_names %}
         <img
           src="{{ url_for('static', filename=o + '.jpg') }}"
           alt=""

@@ -13,7 +13,7 @@ from threading import Lock
 from uuid import uuid4
 
 import cv2
-from flask import Flask, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, abort, redirect, render_template, request, send_from_directory, url_for
 
 from Fundus_Cam import Fundus_Cam
 from modules.process import grade, grade_with_explanation
@@ -191,12 +191,10 @@ def serve_image(filename):
     The filename is validated to reject path-traversal attempts before
     handing it to :func:`~flask.send_from_directory`.
     """
-    # Reject any filename that contains a path separator or parent-directory
-    # component to prevent traversal outside the images directory.
+    # Extract only the bare filename component to prevent traversal outside
+    # the images directory (e.g. "../../etc/passwd" → rejected).
     safe_name = Path(filename).name
-    if safe_name != filename or ".." in filename:
-        from flask import abort
-
+    if safe_name != filename:
         abort(400)
     images_dir = BASE_FOLDER / "images"
     return send_from_directory(str(images_dir), safe_name)

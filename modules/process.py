@@ -102,9 +102,14 @@ def grade_with_explanation(
     cv2.imwrite(processed_path, processed_image)
 
     theia_grade = theia.grade_request(processed_path)
-    gradcam_record = gradcam.run_gradcam(
-        processed_image, processed_path, model_path=model_path
-    )
+    try:
+        gradcam_record = gradcam.run_gradcam(
+            processed_image, processed_path, model_path=model_path
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Grad-CAM explanation step failed for {processed_path!r}: {exc}"
+        ) from exc
 
     return {
         "theia_grade": theia_grade,

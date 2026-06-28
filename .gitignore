@@ -4,3 +4,5 @@
 
 *.pyc
 
+# Node.js (Tailwind CSS build tooling)
+node_modules/

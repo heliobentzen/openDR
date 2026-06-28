@@ -18,9 +18,18 @@ sudo apt-get install -y \
   python3-requests \
   pigpio \
   libcamera-apps \
-  chromium-browser
+  chromium-browser \
+  nodejs \
+  npm
 
 python3 -m pip install --upgrade pip
 python3 -m pip install --upgrade imutils
+
+# ── Tailwind CSS (compiled offline; output committed to static/css/tailwind.css)
+echo "Building Tailwind CSS..."
+cd /home/pi/openDR || { echo "ERROR: /home/pi/openDR not found. Ensure the repository is cloned there."; exit 1; }
+npm install --save-dev tailwindcss
+npx tailwindcss -i ./static/css/tailwind.src.css -o ./static/css/tailwind.css --minify
+echo "Tailwind CSS built successfully."
 
 echo "Done. Ensure libcamera is enabled and run: python3 /home/pi/openDR/fundus.py"

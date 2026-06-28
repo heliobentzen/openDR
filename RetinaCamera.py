@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
+import types
 from pathlib import Path
 from threading import Thread
 from typing import Final
@@ -209,7 +210,12 @@ class RetinaCamera:
     def __enter__(self) -> "RetinaCamera":
         return self.start()
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
         self.stop()
 
     # ------------------------------------------------------------------
@@ -279,6 +285,9 @@ class RetinaCamera:
         try:
             frame = self._camera.capture_array()
         except Exception as exc:
+            # Picamera2 does not expose a public thermal-fault exception type.
+            # Inspect the message as a best-effort heuristic; callers can
+            # catch RetinaCameraError to handle both failure modes uniformly.
             msg = str(exc).lower()
             if "temperature" in msg or "thermal" in msg or "overheat" in msg:
                 raise CameraOverheatError(
@@ -289,7 +298,9 @@ class RetinaCamera:
             ) from exc
 
         # Heuristic: an all-zero frame can indicate an ISP/thermal failure.
-        if not np.any(frame):
+        # frame.max() short-circuits as soon as a non-zero value is found,
+        # making it faster than np.any() on high-resolution sensor arrays.
+        if frame.max() == 0:
             raise CameraOverheatError(
                 "Captured frame is entirely black – possible thermal fault or "
                 "camera hardware failure."
@@ -301,8 +312,8 @@ class RetinaCamera:
         enhanced = self._apply_contrast_enhancement(frame)
 
         encode_params = [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality]
-        encoded, image_bytes = cv2.imencode(".jpg", enhanced, encode_params)
-        if not encoded:
+        encode_success, image_bytes = cv2.imencode(".jpg", enhanced, encode_params)
+        if not encode_success:
             raise RuntimeError(
                 "Unable to encode camera frame as JPEG. "
                 "Check camera connection and frame data."

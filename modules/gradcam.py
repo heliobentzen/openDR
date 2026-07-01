@@ -304,6 +304,13 @@ def _compute_guided_backprop(
     handles: list = []
     relu_outputs: dict[int, "torch.Tensor"] = {}
 
+    # Disable in-place ReLU operations to avoid the backward hook error:
+    # "Output 0 of BackwardHookFunctionBackward is a view and is being
+    # modified inplace".
+    for module in model.modules():
+        if isinstance(module, nn.ReLU):
+            module.inplace = False
+
     def make_forward_hook(idx: int):
         def hook(
             _module: "nn.Module",
@@ -328,8 +335,6 @@ def _compute_guided_backprop(
             positive_upstream = torch.clamp(grad_out[0], min=0)
             positive_activation = (relu_outputs[idx] > 0).float()
             guided = positive_upstream * positive_activation
-            # Free the stored activation tensor once it has been consumed.
-            del relu_outputs[idx]
             return (guided,)
 
         return hook
@@ -393,8 +398,9 @@ def _compute_guided_gradcam(
     """
     _, h_in, w_in = guided_grads.shape
 
-    # Upsample coarse Grad-CAM to input resolution.
-    cam_upsampled = cv2.resize(cam, (w_in, h_in))  # (H_in, W_in)
+    # Upsample coarse Grad-CAM to input resolution using bilinear interpolation
+    # to produce a smooth, continuous heatmap.
+    cam_upsampled = cv2.resize(cam, (w_in, h_in), interpolation=cv2.INTER_LINEAR)  # (H_in, W_in)
 
     # Per-pixel L2 magnitude across channels.
     guided_magnitude = np.linalg.norm(guided_grads, axis=0)  # (H_in, W_in)

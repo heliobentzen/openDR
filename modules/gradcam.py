@@ -305,6 +305,9 @@ def _compute_guided_backprop(
         caller can combine them with the Grad-CAM map before normalisation.
     """
     handles: list = []
+    # Some torchvision blocks reuse the same nn.ReLU module multiple times in
+    # one forward pass, so each hook index keeps a stack of activations that
+    # can be consumed in reverse order during backpropagation.
     relu_outputs: dict[int, list["torch.Tensor"]] = {}
 
     def make_forward_hook(idx: int):
@@ -329,11 +332,14 @@ def _compute_guided_backprop(
             # Guided-backprop rule: zero out negative upstream gradients and
             # positions where the forward activation was non-positive.
             positive_upstream = torch.clamp(grad_out[0], min=0)
-            activation = relu_outputs[idx].pop()
+            activations = relu_outputs.get(idx)
+            if not activations:
+                return (positive_upstream,)
+            activation = activations.pop()
             positive_activation = (activation > 0).float()
             guided = positive_upstream * positive_activation
             # Free the stored activation tensor once it has been consumed.
-            if not relu_outputs[idx]:
+            if not activations:
                 del relu_outputs[idx]
             return (guided,)
 

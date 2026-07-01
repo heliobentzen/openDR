@@ -68,13 +68,17 @@ DR_CLASSES: list[str] = [
     "PDR",
 ]
 
-#: Fraction of the maximum activation above which a pixel is treated as a
-#: potential lesion site.
+#: Fallback activation fraction above which a pixel is treated as a potential
+#: lesion site when adaptive thresholding would be too permissive.
 _LESION_THRESHOLD: float = 0.5
 
 #: Minimum bounding-box area (original-image pixels) required to report a
 #: lesion region (guards against noise artefacts).
 _MIN_LESION_AREA: int = 100
+
+#: Fraction of the distance-transform peak used to split touching lesion blobs
+#: into separate connected components.
+_LESION_SPLIT_RATIO: float = 0.35
 
 #: Opacity of the heatmap overlay blended onto the original image.
 _OVERLAY_ALPHA: float = 0.45
@@ -472,9 +476,10 @@ def _extract_lesion_regions(
 ) -> list[dict[str, Any]]:
     """Detect high-activation lesion regions and return their coordinates.
 
-    Thresholds the Grad-CAM map to produce a binary mask, finds external
-    contours, computes bounding boxes, and scales the coordinates back to
-    the original image resolution.
+    Applies adaptive thresholding (Otsu with a safety floor), uses connected
+    components plus watershed splitting to separate touching lesion clusters,
+    then computes bounding boxes and clinical region metrics scaled to the
+    original image resolution.
 
     Parameters
     ----------
@@ -494,9 +499,9 @@ def _extract_lesion_regions(
     -------
     list of dict
         Each entry contains the keys ``x``, ``y``, ``width``, ``height``,
-        ``mean_activation``, and ``area`` in original-image pixel
-        coordinates.  The list is sorted by descending ``mean_activation``
-        (most significant lesions first).
+        ``mean_activation``, ``relative_intensity``, ``circularity``, and
+        ``area`` in original-image pixel coordinates.  The list is sorted by
+        descending ``mean_activation`` (most significant lesions first).
     """
     orig_h, orig_w = image_shape
     cam_h, cam_w = cam.shape
@@ -504,11 +509,55 @@ def _extract_lesion_regions(
     scale_x = orig_w / cam_w
     scale_y = orig_h / cam_h
 
-    binary = (cam >= threshold).astype(np.uint8) * 255
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cam_uint8 = np.clip(cam * 255.0, 0, 255).astype(np.uint8)
+    blurred = cv2.GaussianBlur(cam_uint8, (5, 5), 0)
+    otsu_value, _ = cv2.threshold(
+        blurred,
+        0,
+        255,
+        cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+    )
+    effective_threshold = max(int(round(threshold * 255)), int(otsu_value))
+    _, binary = cv2.threshold(cam_uint8, effective_threshold, 255, cv2.THRESH_BINARY)
+
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+    distance = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+    if float(distance.max()) > 0.0:
+        _, sure_fg = cv2.threshold(
+            distance,
+            _LESION_SPLIT_RATIO * float(distance.max()),
+            255,
+            0,
+        )
+        sure_fg = sure_fg.astype(np.uint8)
+    else:
+        sure_fg = binary.copy()
+
+    _, markers = cv2.connectedComponents(sure_fg)
+    markers = markers + 1
+    unknown = cv2.subtract(binary, sure_fg)
+    markers[unknown == 255] = 0
+    markers = cv2.watershed(cv2.cvtColor(cam_uint8, cv2.COLOR_GRAY2BGR), markers)
+
+    global_mean = float(cam.mean())
+    denom = max(global_mean, 1e-6)
 
     regions: list[dict[str, Any]] = []
-    for cnt in contours:
+    for label in np.unique(markers):
+        if label <= 1:
+            continue
+        component_mask = (markers == label).astype(np.uint8)
+        if component_mask.sum() == 0:
+            continue
+        contours, _ = cv2.findContours(
+            component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        if not contours:
+            continue
+        cnt = max(contours, key=cv2.contourArea)
         cx, cy, bw, bh = cv2.boundingRect(cnt)
         ox = int(round(cx * scale_x))
         oy = int(round(cy * scale_y))
@@ -520,7 +569,21 @@ def _extract_lesion_regions(
         # Clip slice indices to stay within CAM bounds before computing mean.
         y_end = min(cy + bh, cam_h)
         x_end = min(cx + bw, cam_w)
-        mean_act = float(cam[cy:y_end, cx:x_end].mean())
+        component_roi = component_mask[cy:y_end, cx:x_end].astype(bool)
+        roi_activations = cam[cy:y_end, cx:x_end]
+        if component_roi.any():
+            mean_act = float(roi_activations[component_roi].mean())
+        else:
+            mean_act = float(roi_activations.mean())
+        contour_area = float(cv2.contourArea(cnt))
+        perimeter = float(cv2.arcLength(cnt, True))
+        circularity = (
+            (4.0 * np.pi * contour_area) / (perimeter * perimeter)
+            if perimeter > 0.0
+            else 0.0
+        )
+        circularity = float(np.clip(circularity, 0.0, 1.0))
+        relative_intensity = mean_act / denom
         regions.append(
             {
                 "x": ox,
@@ -528,6 +591,8 @@ def _extract_lesion_regions(
                 "width": obw,
                 "height": obh,
                 "mean_activation": round(mean_act, 4),
+                "relative_intensity": round(relative_intensity, 4),
+                "circularity": round(circularity, 4),
                 "area": area,
             }
         )
@@ -560,8 +625,8 @@ def run_gradcam(
       as microaneurysms and exudates).
 
     A JSON audit record is written to ``<stem>_gradcam.json`` containing the
-    predicted DR grade, confidence score, paths to both overlays, and the
-    bounding-box coordinates of all detected lesion regions.
+    predicted DR grade, confidence score, paths to both overlays, and lesion
+    regions with bounding-box coordinates plus morphology/intensity metrics.
 
     If *model_path* is not provided the value of the ``OPEN_DR_MODEL_PATH``
     environment variable is used.  When neither is set the model runs in
@@ -645,7 +710,7 @@ def run_gradcam(
     cv2.imwrite(guided_overlay_path, guided_overlay)
 
     audit_record: dict[str, Any] = {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_image": source_path,
         "gradcam_overlay": overlay_path,

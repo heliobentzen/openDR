@@ -335,7 +335,10 @@ def _compute_guided_backprop(
             positive_upstream = torch.clamp(grad_out[0], min=0)
             activations = relu_outputs.get(idx)
             if not activations:
-                return (positive_upstream,)
+                raise RuntimeError(
+                    "Guided backpropagation lost the stored ReLU activation "
+                    f"for hook index {idx}."
+                )
             activation = activations.pop()
             positive_activation = (activation > 0).float()
             guided = positive_upstream * positive_activation

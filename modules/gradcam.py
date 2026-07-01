@@ -304,11 +304,13 @@ def _compute_guided_backprop(
     handles: list = []
     relu_outputs: dict[int, "torch.Tensor"] = {}
 
-    # Disable in-place ReLU operations to avoid the backward hook error:
-    # "Output 0 of BackwardHookFunctionBackward is a view and is being
-    # modified inplace".
-    for module in model.modules():
+    # Temporarily disable in-place ReLU operations to avoid the backward hook
+    # error: "Output 0 of BackwardHookFunctionBackward is a view and is being
+    # modified inplace".  The original state is saved and restored afterwards.
+    relu_inplace_states: dict[int, bool] = {}
+    for i, module in enumerate(model.modules()):
         if isinstance(module, nn.ReLU):
+            relu_inplace_states[i] = module.inplace
             module.inplace = False
 
     def make_forward_hook(idx: int):
@@ -360,6 +362,10 @@ def _compute_guided_backprop(
     finally:
         for h in handles:
             h.remove()
+        # Restore original inplace state of all ReLU modules.
+        for i, module in enumerate(model.modules()):
+            if isinstance(module, nn.ReLU) and i in relu_inplace_states:
+                module.inplace = relu_inplace_states[i]
 
     return guided_grads.astype(np.float32)
 

@@ -304,6 +304,15 @@ def _compute_guided_backprop(
     handles: list = []
     relu_outputs: dict[int, "torch.Tensor"] = {}
 
+    # Temporarily disable in-place ReLU operations to avoid the backward hook
+    # error: "Output 0 of BackwardHookFunctionBackward is a view and is being
+    # modified inplace".  The original state is saved and restored afterwards.
+    relu_inplace_states: dict[int, bool] = {}
+    for i, module in enumerate(model.modules()):
+        if isinstance(module, nn.ReLU):
+            relu_inplace_states[i] = module.inplace
+            module.inplace = False
+
     def make_forward_hook(idx: int):
         def hook(
             _module: "nn.Module",
@@ -328,8 +337,6 @@ def _compute_guided_backprop(
             positive_upstream = torch.clamp(grad_out[0], min=0)
             positive_activation = (relu_outputs[idx] > 0).float()
             guided = positive_upstream * positive_activation
-            # Free the stored activation tensor once it has been consumed.
-            del relu_outputs[idx]
             return (guided,)
 
         return hook
@@ -355,6 +362,10 @@ def _compute_guided_backprop(
     finally:
         for h in handles:
             h.remove()
+        # Restore original inplace state of all ReLU modules.
+        for i, module in enumerate(model.modules()):
+            if isinstance(module, nn.ReLU) and i in relu_inplace_states:
+                module.inplace = relu_inplace_states[i]
 
     return guided_grads.astype(np.float32)
 
@@ -393,8 +404,9 @@ def _compute_guided_gradcam(
     """
     _, h_in, w_in = guided_grads.shape
 
-    # Upsample coarse Grad-CAM to input resolution.
-    cam_upsampled = cv2.resize(cam, (w_in, h_in))  # (H_in, W_in)
+    # Upsample coarse Grad-CAM to input resolution using bilinear interpolation
+    # to produce a smooth, continuous heatmap.
+    cam_upsampled = cv2.resize(cam, (w_in, h_in), interpolation=cv2.INTER_LINEAR)  # (H_in, W_in)
 
     # Per-pixel L2 magnitude across channels.
     guided_magnitude = np.linalg.norm(guided_grads, axis=0)  # (H_in, W_in)

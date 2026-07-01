@@ -117,6 +117,9 @@ class _GradCAMHook:
 def _build_model(num_classes: int = 5) -> "nn.Module":
     """Return a ResNet-18 with a custom head for *num_classes* DR grades."""
     model = models.resnet18(weights=None)
+    for module in model.modules():
+        if isinstance(module, nn.ReLU):
+            module.inplace = False
     in_features = model.fc.in_features
     model.fc = nn.Linear(in_features, num_classes)
     return model
@@ -302,7 +305,7 @@ def _compute_guided_backprop(
         caller can combine them with the Grad-CAM map before normalisation.
     """
     handles: list = []
-    relu_outputs: dict[int, "torch.Tensor"] = {}
+    relu_outputs: dict[int, list["torch.Tensor"]] = {}
 
     def make_forward_hook(idx: int):
         def hook(
@@ -313,7 +316,7 @@ def _compute_guided_backprop(
             # Save detached ReLU output so the backward hook can mask
             # non-positive activations.  Only nn.ReLU modules are hooked
             # (see loop below), so output > 0 iff input > 0.
-            relu_outputs[idx] = output.detach()
+            relu_outputs.setdefault(idx, []).append(output.detach())
 
         return hook
 
@@ -326,10 +329,12 @@ def _compute_guided_backprop(
             # Guided-backprop rule: zero out negative upstream gradients and
             # positions where the forward activation was non-positive.
             positive_upstream = torch.clamp(grad_out[0], min=0)
-            positive_activation = (relu_outputs[idx] > 0).float()
+            activation = relu_outputs[idx].pop()
+            positive_activation = (activation > 0).float()
             guided = positive_upstream * positive_activation
             # Free the stored activation tensor once it has been consumed.
-            del relu_outputs[idx]
+            if not relu_outputs[idx]:
+                del relu_outputs[idx]
             return (guided,)
 
         return hook

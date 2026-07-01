@@ -310,8 +310,9 @@ def _compute_guided_backprop(
             _inp: tuple,
             output: "torch.Tensor",
         ) -> None:
-            # Save the ReLU output (output > 0 iff input > 0 for any ReLU
-            # variant, including inplace, so using output is safe).
+            # Save detached ReLU output so the backward hook can mask
+            # non-positive activations.  Only nn.ReLU modules are hooked
+            # (see loop below), so output > 0 iff input > 0.
             relu_outputs[idx] = output.detach()
 
         return hook
@@ -326,7 +327,10 @@ def _compute_guided_backprop(
             # positions where the forward activation was non-positive.
             positive_upstream = torch.clamp(grad_out[0], min=0)
             positive_activation = (relu_outputs[idx] > 0).float()
-            return (positive_upstream * positive_activation,)
+            guided = positive_upstream * positive_activation
+            # Free the stored activation tensor once it has been consumed.
+            del relu_outputs[idx]
+            return (guided,)
 
         return hook
 
@@ -393,7 +397,7 @@ def _compute_guided_gradcam(
     cam_upsampled = cv2.resize(cam, (w_in, h_in))  # (H_in, W_in)
 
     # Per-pixel L2 magnitude across channels.
-    guided_magnitude = np.sqrt((guided_grads ** 2).sum(axis=0))  # (H_in, W_in)
+    guided_magnitude = np.linalg.norm(guided_grads, axis=0)  # (H_in, W_in)
 
     # Element-wise product: class-discriminative × pixel-precise.
     guided_gradcam = cam_upsampled * guided_magnitude

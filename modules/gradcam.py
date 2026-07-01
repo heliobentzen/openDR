@@ -306,8 +306,9 @@ def _compute_guided_backprop(
     """
     handles: list = []
     # Some torchvision blocks reuse the same nn.ReLU module multiple times in
-    # one forward pass, so each hook index keeps a stack of activations that
-    # can be consumed in reverse order during backpropagation.
+    # one forward pass, so each hook index (one enumerated ReLU module) keeps
+    # a stack of activations that can be consumed in reverse order during
+    # backpropagation.
     relu_outputs: dict[int, list["torch.Tensor"]] = {}
 
     def make_forward_hook(idx: int):

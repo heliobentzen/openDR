@@ -1,19 +1,29 @@
 """
-Grad-CAM (Gradient-weighted Class Activation Mapping) for diabetic-retinopathy
-classification on fundus images.
+Grad-CAM and Guided Grad-CAM for diabetic-retinopathy classification on fundus
+images.
 
-Implements Class Activation Mapping as described in:
-  Selvaraju et al., "Grad-CAM: Visual Explanations from Deep Networks via
-  Gradient-based Localization", ICCV 2017.
+Implements:
+
+* **Grad-CAM** – Selvaraju et al., "Grad-CAM: Visual Explanations from Deep
+  Networks via Gradient-based Localization", ICCV 2017.
+* **Guided Backpropagation** – Springenberg et al., "Striving for Simplicity:
+  The All Convolutional Net", ICLR 2015 workshop.
+* **Guided Grad-CAM** – element-wise product of the upsampled Grad-CAM map and
+  the guided-backpropagation gradient, combining class-discriminative
+  localisation with pixel-precise edge detail.
 
 The module:
 
 * Runs a ResNet-18 classification model (fine-tuned or demo) on a processed
   fundus image.
 * Extracts gradients from the final convolutional block to build the
-  class-discriminative activation map (CAM).
-* Blends the resulting heatmap over the original image to produce a
-  colour-coded overlay (``<stem>_gradcam.jpg``).
+  class-discriminative activation map (CAM) – ``<stem>_gradcam.jpg``.
+* Computes guided backpropagation by hooking every ReLU in the network so that
+  only positive gradients flowing through positive activations are propagated,
+  yielding a pixel-level saliency map.
+* Multiplies the upsampled Grad-CAM with the guided-backprop magnitude to
+  produce **Guided Grad-CAM** – ``<stem>_guided_gradcam.jpg`` – which highlights
+  the exact edges of small retinal lesions instead of coarse circular blobs.
 * Identifies high-activation lesion regions (microaneurysms, exudates,
   haemorrhages) and writes their bounding-box coordinates together with the
   full audit record to ``<stem>_gradcam.json``.
@@ -257,6 +267,152 @@ def _compute_gradcam(
 
 
 # ---------------------------------------------------------------------------
+# Guided Backpropagation
+# ---------------------------------------------------------------------------
+
+
+def _compute_guided_backprop(
+    model: "nn.Module",
+    tensor: "torch.Tensor",
+    target_class: int,
+) -> np.ndarray:
+    """Compute guided-backpropagation gradients at the input image.
+
+    Registers temporary forward and backward hooks on every ``nn.ReLU``
+    module in the network so that only *positive* gradients flowing through
+    *positively-activated* neurons are propagated (Springenberg et al.,
+    2015).  All hooks are removed before returning.
+
+    Parameters
+    ----------
+    model:
+        Classification model in eval mode.
+    tensor:
+        Pre-processed input tensor of shape ``(1, 3, H, W)`` on the target
+        device.  A detached clone with ``requires_grad=True`` is created
+        internally so the original tensor is never modified.
+    target_class:
+        Class index whose score is backpropagated.
+
+    Returns
+    -------
+    np.ndarray
+        ``float32`` array of shape ``(3, H, W)`` containing the raw guided
+        gradients at the input.  Values are **not** normalised so that the
+        caller can combine them with the Grad-CAM map before normalisation.
+    """
+    handles: list = []
+    relu_outputs: dict[int, "torch.Tensor"] = {}
+
+    def make_forward_hook(idx: int):
+        def hook(
+            _module: "nn.Module",
+            _inp: tuple,
+            output: "torch.Tensor",
+        ) -> None:
+            # Save detached ReLU output so the backward hook can mask
+            # non-positive activations.  Only nn.ReLU modules are hooked
+            # (see loop below), so output > 0 iff input > 0.
+            relu_outputs[idx] = output.detach()
+
+        return hook
+
+    def make_backward_hook(idx: int):
+        def hook(
+            _module: "nn.Module",
+            _grad_in: tuple,
+            grad_out: tuple,
+        ) -> tuple:
+            # Guided-backprop rule: zero out negative upstream gradients and
+            # positions where the forward activation was non-positive.
+            positive_upstream = torch.clamp(grad_out[0], min=0)
+            positive_activation = (relu_outputs[idx] > 0).float()
+            guided = positive_upstream * positive_activation
+            # Free the stored activation tensor once it has been consumed.
+            del relu_outputs[idx]
+            return (guided,)
+
+        return hook
+
+    idx = 0
+    for module in model.modules():
+        if isinstance(module, nn.ReLU):
+            handles.append(module.register_forward_hook(make_forward_hook(idx)))
+            handles.append(
+                module.register_full_backward_hook(make_backward_hook(idx))
+            )
+            idx += 1
+
+    try:
+        model.zero_grad()
+        input_tensor = tensor.clone().requires_grad_(True)
+        logits = model(input_tensor)
+        model.zero_grad()
+        logits[0, target_class].backward()
+        if input_tensor.grad is None:
+            return np.zeros(tensor.shape[1:], dtype=np.float32)  # (3, H, W)
+        guided_grads = input_tensor.grad.squeeze(0).cpu().numpy()  # (3, H, W)
+    finally:
+        for h in handles:
+            h.remove()
+
+    return guided_grads.astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Guided Grad-CAM combination
+# ---------------------------------------------------------------------------
+
+
+def _compute_guided_gradcam(
+    cam: np.ndarray,
+    guided_grads: np.ndarray,
+) -> np.ndarray:
+    """Combine Grad-CAM with guided-backpropagation gradients.
+
+    Upsamples the coarse Grad-CAM map to the input-image resolution and
+    multiplies it element-wise with the L2 magnitude of the guided
+    gradients.  The result is a pixel-precise, class-discriminative saliency
+    map that preserves both the class localisation of Grad-CAM and the
+    edge-level detail of guided backpropagation.
+
+    Parameters
+    ----------
+    cam:
+        Normalised Grad-CAM map ``(H_cam, W_cam)`` with values in
+        ``[0, 1]`` (output of :func:`_compute_gradcam`).
+    guided_grads:
+        Raw guided-backpropagation gradients ``(3, H_in, W_in)`` (output of
+        :func:`_compute_guided_backprop`).
+
+    Returns
+    -------
+    np.ndarray
+        ``float32`` array of shape ``(H_in, W_in)`` with values in
+        ``[0, 1]``.
+    """
+    _, h_in, w_in = guided_grads.shape
+
+    # Upsample coarse Grad-CAM to input resolution.
+    cam_upsampled = cv2.resize(cam, (w_in, h_in))  # (H_in, W_in)
+
+    # Per-pixel L2 magnitude across channels.
+    guided_magnitude = np.linalg.norm(guided_grads, axis=0)  # (H_in, W_in)
+
+    # Element-wise product: class-discriminative × pixel-precise.
+    guided_gradcam = cam_upsampled * guided_magnitude
+
+    # Normalise to [0, 1].
+    g_min, g_max = float(guided_gradcam.min()), float(guided_gradcam.max())
+    if g_max > g_min:
+        guided_gradcam = (guided_gradcam - g_min) / (g_max - g_min)
+    else:
+        guided_gradcam = np.zeros_like(guided_gradcam)
+
+    return guided_gradcam.astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
 # Heatmap overlay
 # ---------------------------------------------------------------------------
 
@@ -380,13 +536,20 @@ def run_gradcam(
     target_class: int | None = None,
     overlay_alpha: float = _OVERLAY_ALPHA,
 ) -> dict[str, Any]:
-    """Run Grad-CAM on a processed fundus image and write the results to disk.
+    """Run Grad-CAM and Guided Grad-CAM on a processed fundus image.
 
-    Generates a colour-coded heatmap overlay saved alongside the source
-    image as ``<stem>_gradcam.jpg`` and writes a JSON audit record as
-    ``<stem>_gradcam.json``.  The JSON document contains the predicted DR
-    grade, confidence score, and the bounding-box coordinates of all
-    detected lesion regions.
+    Generates two colour-coded heatmap overlays saved alongside the source
+    image:
+
+    * ``<stem>_gradcam.jpg`` – standard Grad-CAM overlay (coarse, class-
+      discriminative blobs).
+    * ``<stem>_guided_gradcam.jpg`` – Guided Grad-CAM overlay (pixel-precise
+      edges, highlighting the exact boundaries of small retinal lesions such
+      as microaneurysms and exudates).
+
+    A JSON audit record is written to ``<stem>_gradcam.json`` containing the
+    predicted DR grade, confidence score, paths to both overlays, and the
+    bounding-box coordinates of all detected lesion regions.
 
     If *model_path* is not provided the value of the ``OPEN_DR_MODEL_PATH``
     environment variable is used.  When neither is set the model runs in
@@ -409,7 +572,7 @@ def run_gradcam(
         Force Grad-CAM to explain a specific DR class index.  Defaults to
         the model's top-1 prediction.
     overlay_alpha:
-        Heatmap opacity (0–1) used when blending the overlay.
+        Heatmap opacity (0–1) used when blending both overlays.
 
     Returns
     -------
@@ -441,10 +604,11 @@ def run_gradcam(
             "expected .jpg, .jpeg, or .png."
         )
 
-    # Derive output paths – both are forced into the same directory as the
+    # Derive output paths – all are forced into the same directory as the
     # source so they cannot escape to a different filesystem location.
     parent = p.parent
     overlay_path = str(parent / (p.stem + "_gradcam.jpg"))
+    guided_overlay_path = str(parent / (p.stem + "_guided_gradcam.jpg"))
     json_path = str(parent / (p.stem + "_gradcam.json"))
 
     resolved_model_path = model_path or os.environ.get("OPEN_DR_MODEL_PATH")
@@ -452,18 +616,28 @@ def run_gradcam(
     model = _load_model(resolved_model_path, device=device)
     tensor = _preprocess(image).to(device)
 
+    # Step 1 – standard Grad-CAM (coarse class-discriminative map).
     cam, pred_class, confidence = _compute_gradcam(model, tensor, target_class)
 
+    # Step 2 – guided backpropagation (pixel-level gradients).
+    guided_grads = _compute_guided_backprop(model, tensor, pred_class)
+
+    # Step 3 – Guided Grad-CAM (pixel-precise, class-discriminative).
+    guided_gradcam = _compute_guided_gradcam(cam, guided_grads)
+
     overlay = _overlay_heatmap(image, cam, alpha=overlay_alpha)
+    guided_overlay = _overlay_heatmap(image, guided_gradcam, alpha=overlay_alpha)
     lesions = _extract_lesion_regions(cam, image.shape[:2])
 
     cv2.imwrite(overlay_path, overlay)
+    cv2.imwrite(guided_overlay_path, guided_overlay)
 
     audit_record: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_image": source_path,
         "gradcam_overlay": overlay_path,
+        "guided_gradcam_overlay": guided_overlay_path,
         "gradcam_audit_json": json_path,
         "model_path": resolved_model_path or "random_weights_demo",
         "predicted_dr_grade": {

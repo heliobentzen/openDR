@@ -1,5 +1,16 @@
 # Changelog
 
+## [4.0.1] - 2026-07-01
+### Fixed
+- **Guided Grad-CAM**: temporarily disables in-place ReLU operations during guided backpropagation to prevent "view is being modified inplace" backward-hook errors; the guided-gradient masking now exactly follows Springenberg et al. (2015).
+
+### Changed
+- **Lesion region extraction**: replaced the fixed activation threshold with adaptive Otsu thresholding (with a configurable safety floor) for more robust detection across varying image exposures.
+- **Lesion splitting**: added watershed-based separation of touching lesion clusters via distance transform, correctly breaking merged blobs into distinct regions.
+- **Noise reduction**: morphological open/close passes applied before connected-component analysis to eliminate small artefacts from the binary mask.
+- **Richer lesion metrics**: each detected region now reports `circularity` (shape roundness, 0–1) and `relative_intensity` (mean activation relative to the whole-image mean) in addition to bounding-box coordinates.
+- Grad-CAM audit JSON schema version bumped to `1.2`.
+
 ## [4.0.0] - 2026-06-28
 ### Added
 - `RetinaCamera` class with lifecycle management, hardware error handling, and CLAHE contrast enhancement.

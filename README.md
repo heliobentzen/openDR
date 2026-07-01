@@ -8,7 +8,15 @@ Built at the Srujana Center for Innovation, LV Prasad Eye Institute, Hyderabad, 
 This software is covered by the MIT License (see `license.txt`).
 
 ## Version
-Current release: **4.0.0**
+Current release: **4.0.1**
+
+## What's New in 4.0.1
+- **Guided Grad-CAM fix** — in-place ReLU operations are temporarily disabled during guided backpropagation to prevent backward-hook inplace-modification errors; gradient masking now correctly follows Springenberg et al. (2015).
+- **Adaptive lesion thresholding** — lesion detection uses Otsu's method with a configurable safety floor instead of a fixed threshold, improving robustness across varying exposures.
+- **Watershed lesion splitting** — touching lesion blobs are separated into distinct regions using a distance-transform watershed, reducing false merges.
+- **Morphological denoising** — open/close passes remove small artefacts from the binary activation mask before connected-component analysis.
+- **Richer lesion metrics** — each detected region now reports `circularity` (0–1 shape roundness) and `relative_intensity` (activation relative to whole-image mean).
+- **Audit JSON schema v1.2** — both overlay paths (`_gradcam.jpg` and `_guided_gradcam.jpg`) and the new metrics are included in the JSON audit record.
 
 ## What's New in 4.0.0
 - **RetinaCamera class** — dedicated camera abstraction with lifecycle management, hardware error handling, and CLAHE contrast enhancement for improved image quality.

@@ -40,6 +40,9 @@ MIN_DARK_RATIO = 0.01
 MAX_DARK_RATIO = 0.42
 PREVIEW_MIN_INTERVAL_S = 0.20
 INFERENCE_WORKER_COUNT = max(1, int(os.environ.get("OPEN_DR_INFERENCE_WORKERS", "2")))
+MAX_INFERENCE_JOB_HISTORY = max(
+    1, int(os.environ.get("OPEN_DR_MAX_INFERENCE_JOB_HISTORY", "8"))
+)
 INFERENCE_STEPS = (
     ("received", "Imagem recebida"),
     ("preprocessing", "Pré-processamento (limpeza de ruído)"),
@@ -307,6 +310,7 @@ def create_inference_job(image_path):
     with inference_jobs_lock:
         inference_jobs[job_id] = {
             "job_id": job_id,
+            "created_at": time.monotonic(),
             "status": "running",
             "current_step": "preprocessing",
             "message": "Imagem enviada para a fila de inferência.",
@@ -315,8 +319,25 @@ def create_inference_job(image_path):
             "steps": steps,
             "result": {},
         }
+        prune_inference_jobs_locked()
 
     return job_id
+
+
+def prune_inference_jobs_locked():
+    overflow = len(inference_jobs) - MAX_INFERENCE_JOB_HISTORY
+    if overflow <= 0:
+        return
+
+    terminal_job_ids = [
+        job_id
+        for job_id, _job in sorted(
+            inference_jobs.items(), key=lambda item: item[1].get("created_at", 0.0)
+        )
+        if _job["status"] != "running"
+    ]
+    for job_id in terminal_job_ids[:overflow]:
+        inference_jobs.pop(job_id, None)
 
 
 def is_inference_job_running(job_id):
@@ -494,17 +515,30 @@ def save_captured_images(patient_id, images):
     if isinstance(images, list):
         for img in images:
             image_path = build_image_path(patient_dir, patient_id, no)
-            image = cv2.imdecode(img, 1)
-            cv2.imwrite(str(image_path), image)
+            write_captured_image(image_path, img)
             last_saved_path = str(image_path)
             no += 1
     else:
         image_path = build_image_path(patient_dir, patient_id, no)
-        image = cv2.imdecode(images, 1)
-        cv2.imwrite(str(image_path), image)
+        write_captured_image(image_path, images)
         last_saved_path = str(image_path)
 
     return last_saved_path
+
+
+def write_captured_image(image_path, image_buffer):
+    if isinstance(image_buffer, (bytes, bytearray)):
+        image_path.write_bytes(image_buffer)
+        return
+
+    if hasattr(image_buffer, "ndim") and image_buffer.ndim == 1 and hasattr(
+        image_buffer, "tobytes"
+    ):
+        image_path.write_bytes(image_buffer.tobytes())
+        return
+
+    if not cv2.imwrite(str(image_path), image_buffer):
+        raise RuntimeError(f"Unable to write captured image to {image_path}.")
 
 
 def build_image_path(patient_dir, patient_id, capture_number):

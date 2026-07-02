@@ -325,8 +325,9 @@ def create_inference_job(image_path):
 
 
 def prune_inference_jobs_locked():
-    overflow = len(inference_jobs) - MAX_INFERENCE_JOB_HISTORY
-    if overflow <= 0:
+    """Prune the oldest completed or failed jobs while holding the job lock."""
+    prune_count = len(inference_jobs) - MAX_INFERENCE_JOB_HISTORY
+    if prune_count <= 0:
         return
 
     terminal_job_ids = [
@@ -336,7 +337,7 @@ def prune_inference_jobs_locked():
         )
         if _job["status"] != "running"
     ]
-    for job_id in terminal_job_ids[:overflow]:
+    for job_id in terminal_job_ids[:prune_count]:
         inference_jobs.pop(job_id, None)
 
 
@@ -514,50 +515,55 @@ def save_captured_images(patient_id, images):
 
     if isinstance(images, list):
         for img in images:
-            image_path = build_image_path(patient_dir, patient_id, no)
-            write_captured_image(image_path, img)
+            image_path = write_captured_image(patient_dir, patient_id, no, img)
             last_saved_path = str(image_path)
             no += 1
     else:
-        image_path = build_image_path(patient_dir, patient_id, no)
-        write_captured_image(image_path, images)
+        image_path = write_captured_image(patient_dir, patient_id, no, images)
         last_saved_path = str(image_path)
 
     return last_saved_path
 
 
-def write_captured_image(image_path, image_buffer):
-    image_path = validate_captured_image_path(image_path)
+def write_captured_image(patient_dir, patient_id, capture_number, image_buffer):
+    """Persist one captured image with a direct JPEG write when possible.
+
+    Picamera2 captures already arrive as JPEG byte buffers for the current
+    Flask flow, so those buffers are written directly to disk to avoid an
+    unnecessary decode/re-encode round trip on the Raspberry Pi CPU. If a
+    decoded image matrix is provided, OpenCV falls back to encoding it.
+    """
+    image_path = build_image_path(patient_dir, patient_id, capture_number)
 
     if isinstance(image_buffer, (bytes, bytearray)):
         image_path.write_bytes(image_buffer)
-        return
+        return image_path
 
     if hasattr(image_buffer, "ndim") and image_buffer.ndim == 1 and hasattr(
         image_buffer, "tobytes"
     ):
         image_path.write_bytes(image_buffer.tobytes())
-        return
+        return image_path
 
-    if not cv2.imwrite(str(image_path), image_buffer):
+    try:
+        wrote_image = cv2.imwrite(str(image_path), image_buffer)
+    except cv2.error as exc:
+        buffer_shape = getattr(image_buffer, "shape", None)
+        raise RuntimeError(
+            "Unable to write captured image to "
+            f"{image_path} (type={type(image_buffer).__name__}, shape={buffer_shape})."
+        ) from exc
+    if not wrote_image:
         buffer_shape = getattr(image_buffer, "shape", None)
         raise RuntimeError(
             "Unable to write captured image to "
             f"{image_path} (type={type(image_buffer).__name__}, shape={buffer_shape})."
         )
-
-
-def validate_captured_image_path(image_path):
-    resolved_path = Path(image_path).resolve()
-    images_dir = (BASE_FOLDER / "images").resolve()
-    try:
-        resolved_path.relative_to(images_dir)
-    except ValueError as exc:
-        raise ValueError(f"Invalid image output path: {image_path}") from exc
-    return resolved_path
+    return image_path
 
 
 def build_image_path(patient_dir, patient_id, capture_number):
+    patient_id = validated_patient_id(patient_id)
     image_identifier = (
         f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S%f')}_{uuid4().hex}"
     )

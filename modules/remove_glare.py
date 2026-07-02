@@ -28,6 +28,12 @@ _HALF_WIDTH: Final[int] = 100
 # saturated (part of the specular highlight).
 _SAT_THRESHOLD: Final[float] = 0.9
 
+# Pre-computed dilation kernel.  MORPH_RECT allows OpenCV to use a
+# separable row+column decomposition — O(n·2k) instead of O(n·k²).
+_DILATE_KERNEL: Final[np.ndarray] = cv2.getStructuringElement(
+    cv2.MORPH_RECT, (25, 25)
+)
+
 
 def remove_glare(im: np.ndarray) -> np.ndarray:
     """Remove direct specular LED reflections from a retinal image.
@@ -40,7 +46,9 @@ def remove_glare(im: np.ndarray) -> np.ndarray:
     The operation is performed on a cropped *view* of *im* to avoid
     copying the entire full-resolution frame, which matters on
     memory-constrained Raspberry Pi hardware.  The array is modified in
-    place.
+    place.  The dilation kernel is pre-computed as a module-level constant
+    (``_DILATE_KERNEL``) using ``cv2.MORPH_RECT`` so OpenCV applies a
+    separable decomposition on each call.
 
     Parameters
     ----------
@@ -63,8 +71,7 @@ def remove_glare(im: np.ndarray) -> np.ndarray:
         green_crop, _SAT_THRESHOLD * 256, 255, cv2.THRESH_BINARY
     )
 
-    kernel = np.ones((25, 25), dtype=np.uint8)
-    temp_mask = cv2.dilate(temp_mask, kernel)
+    temp_mask = cv2.dilate(temp_mask, _DILATE_KERNEL)
 
     # Inpaint only the small crop rather than the whole frame.
     im[y0:y1, x0:x1, :] = cv2.inpaint(

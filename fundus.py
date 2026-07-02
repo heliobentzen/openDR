@@ -326,10 +326,6 @@ def create_inference_job(image_path):
 
 def prune_inference_jobs_locked():
     """Prune the oldest completed or failed jobs while holding the job lock."""
-    prune_count = len(inference_jobs) - MAX_INFERENCE_JOB_HISTORY
-    if prune_count <= 0:
-        return
-
     terminal_job_ids = [
         job_id
         for job_id, _job in sorted(
@@ -337,6 +333,9 @@ def prune_inference_jobs_locked():
         )
         if _job["status"] != "running"
     ]
+    prune_count = len(terminal_job_ids) - MAX_INFERENCE_JOB_HISTORY
+    if prune_count <= 0:
+        return
     for job_id in terminal_job_ids[:prune_count]:
         inference_jobs.pop(job_id, None)
 
@@ -510,22 +509,21 @@ def serve_image(filename):
 def save_captured_images(patient_id, images):
     no = 1
     patient_id = validated_patient_id(patient_id)
-    patient_dir = BASE_FOLDER / "images"
     last_saved_path = None
 
     if isinstance(images, list):
         for img in images:
-            image_path = write_captured_image(patient_dir, patient_id, no, img)
+            image_path = write_captured_image(patient_id, no, img)
             last_saved_path = str(image_path)
             no += 1
     else:
-        image_path = write_captured_image(patient_dir, patient_id, no, images)
+        image_path = write_captured_image(patient_id, no, images)
         last_saved_path = str(image_path)
 
     return last_saved_path
 
 
-def write_captured_image(patient_dir, patient_id, capture_number, image_buffer):
+def write_captured_image(patient_id, capture_number, image_buffer):
     """Persist one captured image with a direct JPEG write when possible.
 
     Picamera2 captures already arrive as JPEG byte buffers for the current
@@ -534,10 +532,10 @@ def write_captured_image(patient_dir, patient_id, capture_number, image_buffer):
     decoded image matrix is provided, OpenCV falls back to encoding it.
     """
     image_filename = build_image_filename(patient_id, capture_number)
-    image_path = patient_dir / image_filename
+    image_path = images_directory() / image_filename
 
     if isinstance(image_buffer, (bytes, bytearray)):
-        with open_captured_image_file(patient_dir, image_filename) as image_file:
+        with open_captured_image_file(image_filename) as image_file:
             image_file.write(image_buffer)
         return image_path
 
@@ -545,7 +543,7 @@ def write_captured_image(patient_dir, patient_id, capture_number, image_buffer):
     if hasattr(image_buffer, "ndim") and image_buffer.ndim == 1 and hasattr(
         image_buffer, "tobytes"
     ):
-        with open_captured_image_file(patient_dir, image_filename) as image_file:
+        with open_captured_image_file(image_filename) as image_file:
             image_file.write(image_buffer.tobytes())
         return image_path
 
@@ -563,15 +561,19 @@ def build_image_write_error(image_path, image_buffer):
     )
 
 
-def open_captured_image_file(patient_dir, image_filename):
+def images_directory():
+    return (BASE_FOLDER / "images").resolve()
+
+
+def open_captured_image_file(image_filename):
     safe_name = Path(image_filename).name
     if safe_name != image_filename:
         raise ValueError(f"Invalid image filename: {image_filename}")
-    return (patient_dir / safe_name).open("wb")
+    return (images_directory() / safe_name).open("wb")
 
 
 def build_image_filename(patient_id, capture_number):
-    patient_id = Path(validated_patient_id(patient_id)).name
+    patient_id = validated_patient_id(patient_id)
     image_identifier = (
         f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S%f')}_{uuid4().hex}"
     )

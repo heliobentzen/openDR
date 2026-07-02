@@ -533,41 +533,49 @@ def write_captured_image(patient_dir, patient_id, capture_number, image_buffer):
     unnecessary decode/re-encode round trip on the Raspberry Pi CPU. If a
     decoded image matrix is provided, OpenCV falls back to encoding it.
     """
-    image_path = build_image_path(patient_dir, patient_id, capture_number)
+    image_filename = build_image_filename(patient_id, capture_number)
+    image_path = patient_dir / image_filename
 
     if isinstance(image_buffer, (bytes, bytearray)):
-        image_path.write_bytes(image_buffer)
+        with open_captured_image_file(patient_dir, image_filename) as image_file:
+            image_file.write(image_buffer)
         return image_path
 
+    # Picamera2 / OpenCV encoded JPEG buffers are 1-D byte arrays.
     if hasattr(image_buffer, "ndim") and image_buffer.ndim == 1 and hasattr(
         image_buffer, "tobytes"
     ):
-        image_path.write_bytes(image_buffer.tobytes())
+        with open_captured_image_file(patient_dir, image_filename) as image_file:
+            image_file.write(image_buffer.tobytes())
         return image_path
 
-    try:
-        wrote_image = cv2.imwrite(str(image_path), image_buffer)
-    except cv2.error as exc:
-        buffer_shape = getattr(image_buffer, "shape", None)
-        raise RuntimeError(
-            "Unable to write captured image to "
-            f"{image_path} (type={type(image_buffer).__name__}, shape={buffer_shape})."
-        ) from exc
+    wrote_image = cv2.imwrite(str(image_path), image_buffer)
     if not wrote_image:
-        buffer_shape = getattr(image_buffer, "shape", None)
-        raise RuntimeError(
-            "Unable to write captured image to "
-            f"{image_path} (type={type(image_buffer).__name__}, shape={buffer_shape})."
-        )
+        raise RuntimeError(build_image_write_error(image_path, image_buffer))
     return image_path
 
 
-def build_image_path(patient_dir, patient_id, capture_number):
-    patient_id = validated_patient_id(patient_id)
+def build_image_write_error(image_path, image_buffer):
+    buffer_shape = getattr(image_buffer, "shape", None)
+    return (
+        "Unable to write captured image to "
+        f"{image_path} (type={type(image_buffer).__name__}, shape={buffer_shape})."
+    )
+
+
+def open_captured_image_file(patient_dir, image_filename):
+    safe_name = Path(image_filename).name
+    if safe_name != image_filename:
+        raise ValueError(f"Invalid image filename: {image_filename}")
+    return (patient_dir / safe_name).open("wb")
+
+
+def build_image_filename(patient_id, capture_number):
+    patient_id = Path(validated_patient_id(patient_id)).name
     image_identifier = (
         f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S%f')}_{uuid4().hex}"
     )
-    return patient_dir / f"{patient_id}_{image_identifier}_{capture_number}.jpg"
+    return f"{patient_id}_{image_identifier}_{capture_number}.jpg"
 
 
 def make_a_dir(pr_t):

@@ -40,6 +40,9 @@ MIN_DARK_RATIO = 0.01
 MAX_DARK_RATIO = 0.42
 PREVIEW_MIN_INTERVAL_S = 0.20
 INFERENCE_WORKER_COUNT = max(1, int(os.environ.get("OPEN_DR_INFERENCE_WORKERS", "2")))
+MAX_INFERENCE_JOB_HISTORY = max(
+    1, int(os.environ.get("OPEN_DR_MAX_INFERENCE_JOB_HISTORY", "8"))
+)
 INFERENCE_STEPS = (
     ("received", "Imagem recebida"),
     ("preprocessing", "Pré-processamento (limpeza de ruído)"),
@@ -307,6 +310,7 @@ def create_inference_job(image_path):
     with inference_jobs_lock:
         inference_jobs[job_id] = {
             "job_id": job_id,
+            "created_at": time.time(),
             "status": "running",
             "current_step": "preprocessing",
             "message": "Imagem enviada para a fila de inferência.",
@@ -315,8 +319,25 @@ def create_inference_job(image_path):
             "steps": steps,
             "result": {},
         }
+        prune_inference_jobs_locked()
 
     return job_id
+
+
+def prune_inference_jobs_locked():
+    """Prune the oldest completed or failed jobs while holding the job lock."""
+    terminal_job_ids = [
+        job_id
+        for job_id, job in sorted(
+            inference_jobs.items(), key=lambda item: item[1].get("created_at", 0.0)
+        )
+        if job["status"] != "running"
+    ]
+    prune_count = len(terminal_job_ids) - MAX_INFERENCE_JOB_HISTORY
+    if prune_count <= 0:
+        return
+    for job_id in terminal_job_ids[:prune_count]:
+        inference_jobs.pop(job_id, None)
 
 
 def is_inference_job_running(job_id):
@@ -488,30 +509,80 @@ def serve_image(filename):
 def save_captured_images(patient_id, images):
     no = 1
     patient_id = validated_patient_id(patient_id)
-    patient_dir = BASE_FOLDER / "images"
     last_saved_path = None
 
     if isinstance(images, list):
         for img in images:
-            image_path = build_image_path(patient_dir, patient_id, no)
-            image = cv2.imdecode(img, 1)
-            cv2.imwrite(str(image_path), image)
+            image_path = write_captured_image(patient_id, no, img)
             last_saved_path = str(image_path)
             no += 1
     else:
-        image_path = build_image_path(patient_dir, patient_id, no)
-        image = cv2.imdecode(images, 1)
-        cv2.imwrite(str(image_path), image)
+        image_path = write_captured_image(patient_id, no, images)
         last_saved_path = str(image_path)
 
     return last_saved_path
 
 
-def build_image_path(patient_dir, patient_id, capture_number):
+def write_captured_image(patient_id, capture_number, image_buffer):
+    """Persist one captured image with a direct JPEG write when possible.
+
+    Picamera2 captures already arrive as JPEG byte buffers for the current
+    Flask flow, so those buffers are written directly to disk to avoid an
+    unnecessary decode/re-encode round trip on the Raspberry Pi CPU. If a
+    decoded image matrix is provided, OpenCV falls back to encoding it.
+    """
+    image_filename = build_image_filename(patient_id, capture_number)
+    image_path = images_directory() / image_filename
+
+    if isinstance(image_buffer, (bytes, bytearray)):
+        with open_captured_image_file(image_filename) as image_file:
+            image_file.write(image_buffer)
+        return image_path
+
+    # Picamera2 / OpenCV encoded JPEG buffers are 1-D byte arrays.
+    if hasattr(image_buffer, "ndim") and image_buffer.ndim == 1 and hasattr(
+        image_buffer, "tobytes"
+    ):
+        with open_captured_image_file(image_filename) as image_file:
+            image_file.write(image_buffer.tobytes())
+        return image_path
+
+    wrote_image = cv2.imwrite(str(image_path), image_buffer)
+    if not wrote_image:
+        raise OSError(build_image_write_error(image_path, image_buffer))
+    return image_path
+
+
+def build_image_write_error(image_path, image_buffer):
+    buffer_shape = getattr(image_buffer, "shape", None)
+    return (
+        "Unable to write captured image to "
+        f"{image_path} (type={type(image_buffer).__name__}, shape={buffer_shape})."
+    )
+
+
+def images_directory():
+    return (BASE_FOLDER / "images").resolve()
+
+
+def open_captured_image_file(image_filename):
+    safe_name = Path(image_filename).name
+    if safe_name != image_filename or safe_name in {"", ".", ".."}:
+        raise ValueError(f"Invalid image filename: {image_filename}")
+    output_path = (images_directory() / safe_name).resolve()
+    try:
+        output_path.relative_to(images_directory())
+    except ValueError as exc:
+        raise ValueError(f"Invalid image filename: {image_filename}") from exc
+    return output_path.open("wb")
+
+
+def build_image_filename(patient_id, capture_number):
+    patient_id = validated_patient_id(patient_id)
     image_identifier = (
         f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S%f')}_{uuid4().hex}"
     )
-    return patient_dir / f"{patient_id}_{image_identifier}_{capture_number}.jpg"
+    return f"{patient_id}_{image_identifier}_{capture_number}.jpg"
 
 
 def make_a_dir(pr_t):

@@ -310,7 +310,7 @@ def create_inference_job(image_path):
     with inference_jobs_lock:
         inference_jobs[job_id] = {
             "job_id": job_id,
-            "created_at": time.monotonic(),
+            "created_at": time.time(),
             "status": "running",
             "current_step": "preprocessing",
             "message": "Imagem enviada para a fila de inferência.",
@@ -527,6 +527,8 @@ def save_captured_images(patient_id, images):
 
 
 def write_captured_image(image_path, image_buffer):
+    image_path = validate_captured_image_path(image_path)
+
     if isinstance(image_buffer, (bytes, bytearray)):
         image_path.write_bytes(image_buffer)
         return
@@ -538,7 +540,21 @@ def write_captured_image(image_path, image_buffer):
         return
 
     if not cv2.imwrite(str(image_path), image_buffer):
-        raise RuntimeError(f"Unable to write captured image to {image_path}.")
+        buffer_shape = getattr(image_buffer, "shape", None)
+        raise RuntimeError(
+            "Unable to write captured image to "
+            f"{image_path} (type={type(image_buffer).__name__}, shape={buffer_shape})."
+        )
+
+
+def validate_captured_image_path(image_path):
+    resolved_path = Path(image_path).resolve()
+    images_dir = (BASE_FOLDER / "images").resolve()
+    try:
+        resolved_path.relative_to(images_dir)
+    except ValueError as exc:
+        raise ValueError(f"Invalid image output path: {image_path}") from exc
+    return resolved_path
 
 
 def build_image_path(patient_dir, patient_id, capture_number):

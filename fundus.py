@@ -328,10 +328,10 @@ def prune_inference_jobs_locked():
     """Prune the oldest completed or failed jobs while holding the job lock."""
     terminal_job_ids = [
         job_id
-        for job_id, _job in sorted(
+        for job_id, job in sorted(
             inference_jobs.items(), key=lambda item: item[1].get("created_at", 0.0)
         )
-        if _job["status"] != "running"
+        if job["status"] != "running"
     ]
     prune_count = len(terminal_job_ids) - MAX_INFERENCE_JOB_HISTORY
     if prune_count <= 0:
@@ -549,7 +549,7 @@ def write_captured_image(patient_id, capture_number, image_buffer):
 
     wrote_image = cv2.imwrite(str(image_path), image_buffer)
     if not wrote_image:
-        raise RuntimeError(build_image_write_error(image_path, image_buffer))
+        raise OSError(build_image_write_error(image_path, image_buffer))
     return image_path
 
 
@@ -567,9 +567,14 @@ def images_directory():
 
 def open_captured_image_file(image_filename):
     safe_name = Path(image_filename).name
-    if safe_name != image_filename:
+    if safe_name != image_filename or safe_name in {"", ".", ".."}:
         raise ValueError(f"Invalid image filename: {image_filename}")
-    return (images_directory() / safe_name).open("wb")
+    output_path = (images_directory() / safe_name).resolve()
+    try:
+        output_path.relative_to(images_directory())
+    except ValueError as exc:
+        raise ValueError(f"Invalid image filename: {image_filename}") from exc
+    return output_path.open("wb")
 
 
 def build_image_filename(patient_id, capture_number):

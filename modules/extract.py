@@ -135,7 +135,7 @@ def extract_circles(image: np.ndarray) -> np.ndarray:
     return cv2.bitwise_and(image, image, mask=_get_circle_mask(h, w))
 
 
-def erode_thresh(image: np.ndarray) -> np.ndarray:
+def erode_thresh(image: np.ndarray, threshold_value: int = _THRESHOLD_VALUE) -> np.ndarray:
     """Convert *image* to a smoothed binary mask via threshold and erosion.
 
     The image is converted to grayscale, cropped to the axis-aligned
@@ -195,7 +195,8 @@ def erode_thresh(image: np.ndarray) -> np.ndarray:
     # OpenCL when USE_GPU is True; falls back to CPU automatically otherwise.
     work = cv2.UMat(roi_half) if USE_GPU else roi_half
 
-    _ret, work = cv2.threshold(work, _THRESHOLD_VALUE, 255, cv2.THRESH_BINARY)
+    effective_threshold = int(np.clip(threshold_value, 0, 255))
+    _ret, work = cv2.threshold(work, effective_threshold, 255, cv2.THRESH_BINARY)
     work = cv2.erode(work, _EROSION_KERNEL_HALF, iterations=_EROSION_ITERATIONS)
     # 11×11 is the half-scale equivalent of the original 21×21 kernel.
     work = cv2.GaussianBlur(work, (11, 11), 0)
@@ -264,7 +265,17 @@ def ellipse_fit(image: np.ndarray, cont_img: np.ndarray) -> np.ndarray:
     return cv2.bitwise_and(image, image, mask=mask)
 
 
-def extract_fundus(filename: str) -> np.ndarray:
+def extract_fundus_from_image(
+    image: np.ndarray,
+    threshold_value: int = _THRESHOLD_VALUE,
+) -> np.ndarray:
+    """Return the extracted fundus region from an already-loaded image."""
+    circle = extract_circles(image)
+    threshed_image = erode_thresh(circle, threshold_value=threshold_value)
+    return ellipse_fit(circle, threshed_image)
+
+
+def extract_fundus(filename: str, threshold_value: int = _THRESHOLD_VALUE) -> np.ndarray:
     """Load an image file and return the extracted fundus region.
 
     Convenience wrapper that chains :func:`extract_circles`,
@@ -294,7 +305,4 @@ def extract_fundus(filename: str) -> np.ndarray:
     if test_img is None:
         raise FileNotFoundError(f"Cannot read image file: {filename!r}")
 
-    circle = extract_circles(test_img)
-    threshed_image = erode_thresh(circle)
-    return ellipse_fit(circle, threshed_image)
-
+    return extract_fundus_from_image(test_img, threshold_value=threshold_value)

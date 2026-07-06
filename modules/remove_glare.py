@@ -13,6 +13,8 @@ import cv2
 import numpy as np
 from typing import Final
 
+from .gpu_config import USE_GPU
+
 # ---------------------------------------------------------------------------
 # Glare-region constants (pixels in a full-resolution OWL frame)
 # ---------------------------------------------------------------------------
@@ -50,6 +52,14 @@ def remove_glare(im: np.ndarray) -> np.ndarray:
     (``_DILATE_KERNEL``) using ``cv2.MORPH_RECT`` so OpenCV applies a
     separable decomposition on each call.
 
+    When :data:`~modules.gpu_config.USE_GPU` is ``True`` (OpenCL
+    available), the dilation mask is uploaded to the GPU as a
+    :class:`cv2.UMat` before ``cv2.dilate`` and downloaded back to a
+    NumPy array before ``cv2.inpaint``, which does not support UMat.  On a
+    stock Raspberry Pi 4 (no functional OpenCL driver) ``USE_GPU`` is
+    ``False`` and the path is identical to the original CPU-only
+    implementation.
+
     Parameters
     ----------
     im:
@@ -71,11 +81,18 @@ def remove_glare(im: np.ndarray) -> np.ndarray:
         green_crop, _SAT_THRESHOLD * 256, 255, cv2.THRESH_BINARY
     )
 
-    temp_mask = cv2.dilate(temp_mask, _DILATE_KERNEL)
+    temp_mask = cv2.dilate(
+        cv2.UMat(temp_mask) if USE_GPU else temp_mask,
+        _DILATE_KERNEL,
+    )
+
+    # cv2.inpaint does not support UMat; download from the OpenCL device
+    # before calling it.
+    cpu_mask: np.ndarray = temp_mask.get() if USE_GPU else temp_mask  # type: ignore[union-attr]
 
     # Inpaint only the small crop rather than the whole frame.
     im[y0:y1, x0:x1, :] = cv2.inpaint(
-        im[y0:y1, x0:x1, :], temp_mask, 1, cv2.INPAINT_TELEA
+        im[y0:y1, x0:x1, :], cpu_mask, 1, cv2.INPAINT_TELEA
     )
 
     return im

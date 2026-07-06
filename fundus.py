@@ -20,6 +20,7 @@ from uuid import uuid4
 
 import cv2
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
+from werkzeug.utils import safe_join
 
 from Fundus_Cam import Fundus_Cam
 from modules.process import (
@@ -337,6 +338,7 @@ def render_capture(
         lesion_count=lesion_count,
         inference_job_id=inference_job_id,
         patient_id=patient_id,
+        gallery_page_size=GALLERY_DEFAULT_PAGE_SIZE,
         processing_settings=get_processing_settings(),
         processing_defaults=default_processing_settings(),
     )
@@ -555,36 +557,35 @@ def serve_image(filename):
     # Extract only the bare filename component to prevent traversal outside
     # the images directory (e.g. "../../etc/passwd" → rejected).
     try:
-        safe_name = validated_media_filename(filename)
+        image_path = resolved_media_path(filename)
     except ValueError:
         app.logger.warning("Rejected path-traversal attempt in /images: %s", filename)
         abort(400)
-    return send_from_directory(str(images_directory()), safe_name)
+    return send_from_directory(str(images_directory()), image_path.name)
 
 
 @app.route("/thumbnails/<path:filename>")
 def serve_thumbnail(filename):
     try:
-        safe_name = validated_media_filename(filename)
+        source_path = resolved_media_path(filename, allowed_suffixes={".jpg", ".jpeg"})
     except ValueError:
         app.logger.warning(
             "Rejected path-traversal attempt in /thumbnails: %s", filename
         )
         abort(400)
 
-    source_path = images_directory() / safe_name
     if not source_path.exists() or not source_path.is_file():
         abort(404)
 
     requested_size = request.args.get("w", THUMBNAIL_DEFAULT_SIZE, type=int)
     size = max(THUMBNAIL_MIN_SIZE, min(THUMBNAIL_MAX_SIZE, requested_size))
     thumbnail_bytes = cached_thumbnail_bytes(
-        safe_name,
+        source_path.name,
         size,
         source_path.stat().st_mtime_ns,
     )
     if thumbnail_bytes is None:
-        return send_from_directory(str(images_directory()), safe_name)
+        return send_from_directory(str(images_directory()), source_path.name)
 
     response = Response(thumbnail_bytes, mimetype="image/jpeg")
     response.headers["Cache-Control"] = "public, max-age=300"
@@ -694,16 +695,21 @@ def images_directory():
     return (BASE_FOLDER / "images").resolve()
 
 
-def validated_media_filename(value):
+def validated_media_filename(value, allowed_suffixes=None):
     safe_name = Path(value).name
     if safe_name != value or safe_name in {"", ".", ".."}:
         raise ValueError(f"Invalid media filename: {value}")
-    output_path = (images_directory() / safe_name).resolve()
-    try:
-        output_path.relative_to(images_directory())
-    except ValueError as exc:
-        raise ValueError(f"Invalid media filename: {value}") from exc
+    if allowed_suffixes and Path(safe_name).suffix.lower() not in allowed_suffixes:
+        raise ValueError(f"Invalid media filename: {value}")
     return safe_name
+
+
+def resolved_media_path(value, allowed_suffixes=None):
+    safe_name = validated_media_filename(value, allowed_suffixes=allowed_suffixes)
+    joined_path = safe_join(str(images_directory()), safe_name)
+    if joined_path is None:
+        raise ValueError(f"Invalid media filename: {value}")
+    return Path(joined_path)
 
 
 def parse_capture_filename(filename):

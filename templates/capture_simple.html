@@ -185,6 +185,7 @@
       data-default-contrast="{{ processing_defaults.contrast }}"
       data-default-fundus-threshold="{{ processing_defaults.fundus_threshold }}"
       data-default-glare-threshold="{{ processing_defaults.glare_threshold }}"
+      data-gallery-page-size="{{ gallery_page_size }}"
       class="w-[22rem] shrink-0 border-l border-slate-700 bg-slate-900/95 p-4 flex flex-col gap-4 overflow-y-auto"
     >
       <div>
@@ -427,6 +428,7 @@
 
     let inferenceJobId = workflowPanel.dataset.inferenceJobId || '';
     const patientId = workflowPanel.dataset.patientId || '';
+    const galleryPageSize = parseInt(workflowPanel.dataset.galleryPageSize || '12', 10);
     let inferencePollTimer = null;
     let previewMode = 'adjusted';
     let previewRenderFrame = null;
@@ -461,7 +463,7 @@
         return 'N/A';
       }
       const parsedDate = new Date(value);
-      if (Number.isNaN(parsedDate.getTime())) {
+      if (isNaN(parsedDate.getTime())) {
         return 'N/A';
       }
       return parsedDate.toLocaleString('pt-BR', {
@@ -571,7 +573,7 @@
       syncGalleryState([]);
 
       try {
-        const response = await fetch(`/capture-gallery?page=${pageToLoad}&page_size=12&t=${Date.now()}`, {
+        const response = await fetch(`/capture-gallery?page=${pageToLoad}&page_size=${galleryPageSize}&t=${Date.now()}`, {
           cache: 'no-store',
         });
         if (!response.ok) {

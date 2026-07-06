@@ -34,6 +34,39 @@ OPEN_DR_MODEL_PATH
     Path to a ``.pt`` / ``.pth`` checkpoint.  When absent or the file does
     not exist the module operates in *demo mode* with random weights – useful
     for integration testing without a trained checkpoint.
+
+Performance notes (Raspberry Pi 4)
+------------------------------------
+Several optimisations are applied to reduce per-call latency on the Pi 4:
+
+* **Model cache** – loaded ``nn.Module`` instances are stored in the module-
+  level ``_model_cache`` dict, keyed by ``(resolved_path, num_classes)``.
+  Subsequent calls with the same checkpoint avoid the ~0.5–1 s file-I/O and
+  weight-copy overhead.  Restart the service to pick up a new checkpoint.
+
+* **Pre-built transform** – the torchvision ``Compose`` pipeline is
+  constructed once (``_PREPROCESS_TRANSFORM``) rather than inside every
+  ``_preprocess`` call.
+
+* **Pre-allocated morphological kernel** – ``_MORPH_KERNEL_3x3`` uses
+  ``cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))``, matching the
+  pattern in ``extract.py`` / ``remove_glare.py`` and enabling OpenCV's
+  separable-decomposition fast path.
+
+* **CPU thread hint** – ``torch.set_num_threads`` is called once at import
+  time with ``os.cpu_count()`` so PyTorch's BLAS backend uses all available
+  Cortex-A72 cores.
+
+**Why TFLite / quantization is not used here**
+Both Grad-CAM and Guided Grad-CAM require a live autograd backward pass to
+extract gradients.  TFLite and ``torch.quantization.quantize_dynamic`` do
+not support gradient flow, so they cannot be applied to the model used for
+explanation without silently producing incorrect heatmaps.  Quantization
+could be applied to a *separate* inference-only copy to obtain
+``pred_class`` / ``confidence`` faster, but that adds a third forward pass
+and extra RAM – a net loss on the Pi.  This decoupling is left as future
+work for when the Theia grading inference and the Grad-CAM explanation step
+are run on separate hardware.
 """
 from __future__ import annotations
 
@@ -50,6 +83,24 @@ try:
     import torch
     import torch.nn as nn
     from torchvision import models, transforms
+
+    # Use all available CPU cores for BLAS operations.  On Pi 4 (4 × Cortex-A72)
+    # this can halve matrix-multiply time; it is a no-op on hardware where
+    # PyTorch already auto-detects the core count.
+    torch.set_num_threads(os.cpu_count() or 1)
+
+    #: ImageNet pre-processing pipeline built once and reused across all calls.
+    _PREPROCESS_TRANSFORM = transforms.Compose(
+        [
+            transforms.ToPILImage(),
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225],
+            ),
+        ]
+    )
 
     _TORCH_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -82,6 +133,18 @@ _LESION_SPLIT_RATIO: float = 0.35
 
 #: Opacity of the heatmap overlay blended onto the original image.
 _OVERLAY_ALPHA: float = 0.45
+
+#: Pre-allocated 3×3 rectangular structuring element shared by all
+#: morphological operations in ``_extract_lesion_regions``.  Uses
+#: ``MORPH_RECT`` so OpenCV can apply its separable row+column fast path,
+#: matching the pattern in ``extract.py`` and ``remove_glare.py``.
+_MORPH_KERNEL_3x3: np.ndarray = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+
+#: In-process model cache: maps ``(resolved_model_path, num_classes)`` to the
+#: already-loaded ``nn.Module``.  Avoids repeated file I/O and weight-copy
+#: on every ``run_gradcam`` call.  Restart the service to pick up a new
+#: checkpoint.
+_model_cache: "dict[tuple[str | None, int], nn.Module]" = {}
 
 
 # ---------------------------------------------------------------------------
@@ -151,16 +214,24 @@ def _load_model(
     if device is None:
         device = torch.device("cpu")
 
+    # Resolve the path to a canonical string so that relative and absolute
+    # references to the same file share one cache entry.
+    resolved = str(Path(model_path).resolve()) if model_path else None
+    cache_key = (resolved, num_classes)
+    if cache_key in _model_cache:
+        return _model_cache[cache_key]
+
     model = _build_model(num_classes=num_classes)
 
-    if model_path and Path(model_path).is_file():
-        state = torch.load(model_path, map_location=device)
+    if resolved and Path(resolved).is_file():
+        state = torch.load(resolved, map_location=device)
         if isinstance(state, dict) and "model_state_dict" in state:
             state = state["model_state_dict"]
         model.load_state_dict(state)
 
     model.to(device)
     model.eval()
+    _model_cache[cache_key] = model
     return model
 
 
@@ -186,18 +257,7 @@ def _preprocess(image: np.ndarray) -> "torch.Tensor":
         Float tensor of shape ``(1, 3, 224, 224)``.
     """
     rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    transform = transforms.Compose(
-        [
-            transforms.ToPILImage(),
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225],
-            ),
-        ]
-    )
-    return transform(rgb).unsqueeze(0)  # (1, C, H, W)
+    return _PREPROCESS_TRANSFORM(rgb).unsqueeze(0)  # (1, C, H, W)
 
 
 # ---------------------------------------------------------------------------
@@ -520,9 +580,8 @@ def _extract_lesion_regions(
     effective_threshold = max(int(round(threshold * 255)), int(otsu_value))
     _, binary = cv2.threshold(cam_uint8, effective_threshold, 255, cv2.THRESH_BINARY)
 
-    kernel = np.ones((3, 3), dtype=np.uint8)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, _MORPH_KERNEL_3x3, iterations=1)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, _MORPH_KERNEL_3x3, iterations=1)
 
     distance = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
     if float(distance.max()) > 0.0:

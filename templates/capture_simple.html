@@ -534,7 +534,7 @@
       items.forEach((item) => {
         const button = document.createElement('button');
         button.type = 'button';
-        button.dataset.captureItem = '1';
+        button.dataset.captureItem = 'thumbnail';
         button.dataset.filename = item.filename;
         button.className = 'rounded-lg border border-slate-700 bg-slate-950 p-0.5 transition hover:border-slate-500';
         button.title = `${item.patient_id} · ${formatCapturedAt(item.captured_at)}`;

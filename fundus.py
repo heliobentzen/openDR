@@ -706,6 +706,7 @@ def validated_media_filename(value, allowed_suffixes=None):
 
 def resolved_media_path(value, allowed_suffixes=None):
     safe_name = validated_media_filename(value, allowed_suffixes=allowed_suffixes)
+    # safe_join returns None when a path would escape the base directory.
     joined_path = safe_join(str(images_directory()), safe_name)
     if joined_path is None:
         raise ValueError(f"Invalid media filename: {value}")
@@ -794,6 +795,7 @@ def list_patient_capture_metadata(patient_id):
 
 @lru_cache(maxsize=256)
 def cached_thumbnail_bytes(filename, max_dimension, modified_ns):
+    # Keep modified_ns in the cache key so updated files invalidate cached bytes.
     _ = modified_ns
     image_path = images_directory() / filename
     frame = cv2.imread(str(image_path), cv2.IMREAD_COLOR)

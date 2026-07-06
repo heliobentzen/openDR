@@ -31,6 +31,8 @@ import cv2
 import numpy as np
 from typing import Final
 
+from .gpu_config import USE_GPU
+
 # ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------
@@ -155,6 +157,14 @@ def erode_thresh(image: np.ndarray) -> np.ndarray:
       the 14×14 full-scale kernel.
     * ``_EROSION_KERNEL_HALF`` uses ``cv2.MORPH_RECT`` so OpenCV applies a
       separable row+column decomposition internally.
+    * When :data:`~modules.gpu_config.USE_GPU` is ``True`` (OpenCL
+      available), the 804×804 work buffer is uploaded to the GPU as a
+      :class:`cv2.UMat` so that ``cv2.threshold``, ``cv2.erode`` ×5, and
+      ``cv2.GaussianBlur`` execute on the OpenCL device.  The buffer is
+      downloaded back to a NumPy array only for the final ``cv2.resize``
+      and the NumPy slice assignment.  On a stock Raspberry Pi 4 (no
+      functional OpenCL driver) ``USE_GPU`` is ``False`` and the path is
+      identical to the original CPU-only implementation.
 
     Parameters
     ----------
@@ -180,18 +190,26 @@ def erode_thresh(image: np.ndarray) -> np.ndarray:
         roi_gray, (_ROI_HALF_W, _ROI_HALF_H), interpolation=cv2.INTER_AREA
     )
 
-    _ret, threshed = cv2.threshold(roi_half, _THRESHOLD_VALUE, 255, cv2.THRESH_BINARY)
-    threshed = cv2.erode(threshed, _EROSION_KERNEL_HALF, iterations=_EROSION_ITERATIONS)
+    # Optionally upload to the OpenCL device for the heavy operations.
+    # cv2.UMat transparently routes threshold / erode / GaussianBlur through
+    # OpenCL when USE_GPU is True; falls back to CPU automatically otherwise.
+    work = cv2.UMat(roi_half) if USE_GPU else roi_half
+
+    _ret, work = cv2.threshold(work, _THRESHOLD_VALUE, 255, cv2.THRESH_BINARY)
+    work = cv2.erode(work, _EROSION_KERNEL_HALF, iterations=_EROSION_ITERATIONS)
     # 11×11 is the half-scale equivalent of the original 21×21 kernel.
-    threshed = cv2.GaussianBlur(threshed, (11, 11), 0)
+    work = cv2.GaussianBlur(work, (11, 11), 0)
 
     # Upscale back to full ROI dimensions.  INTER_LINEAR is intentional: the
     # image is not purely binary at this point (GaussianBlur produced smooth
     # gradient edges), so a bilinear upscale preserves that gradient more
     # faithfully than INTER_NEAREST and yields cleaner contours for fitEllipse.
-    threshed_roi = cv2.resize(
-        threshed, (_ROI_W, _ROI_H), interpolation=cv2.INTER_LINEAR
-    )
+    work = cv2.resize(work, (_ROI_W, _ROI_H), interpolation=cv2.INTER_LINEAR)
+
+    # Download from the OpenCL device back to a NumPy array before the
+    # slice assignment below (UMat cannot be used as an rvalue in ndarray
+    # fancy indexing).
+    threshed_roi: np.ndarray = work.get() if USE_GPU else work  # type: ignore[union-attr]
 
     # Embed the ROI result in a full-size output to preserve the public
     # interface expected by ellipse_fit and image_processing.py.

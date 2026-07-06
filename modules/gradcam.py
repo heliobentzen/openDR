@@ -144,7 +144,7 @@ _MORPH_KERNEL_3x3: np.ndarray = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)
 #: already-loaded ``nn.Module``.  Avoids repeated file I/O and weight-copy
 #: on every ``run_gradcam`` call.  Restart the service to pick up a new
 #: checkpoint.
-_model_cache: dict = {}
+_model_cache: "dict[tuple[str | None, int], nn.Module]" = {}
 
 
 # ---------------------------------------------------------------------------

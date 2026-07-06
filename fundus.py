@@ -5,6 +5,7 @@
 ##############################################################################
 
 import atexit
+import json
 import os
 import re
 import subprocess
@@ -12,6 +13,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from threading import Lock
 from uuid import uuid4
@@ -54,6 +56,14 @@ INFERENCE_STEPS = (
     ("inference", "Inferência do modelo"),
     ("report", "Geração do relatório"),
 )
+CAPTURE_FILENAME_RE = re.compile(
+    r"^(?P<patient_id>.+)_(?P<date>\d{8})_(?P<time>\d{12})_(?P<uuid>[0-9a-f]{32})_(?P<capture>\d+)\.jpg$"
+)
+GALLERY_DEFAULT_PAGE_SIZE = 12
+GALLERY_MAX_PAGE_SIZE = 60
+THUMBNAIL_DEFAULT_SIZE = 256
+THUMBNAIL_MIN_SIZE = 96
+THUMBNAIL_MAX_SIZE = 384
 
 orangeyellow = 14
 bluegreen = 15
@@ -313,6 +323,8 @@ def render_capture(
     lesion_count=None,
     inference_job_id=None,
 ):
+    with state.lock:
+        patient_id = state.patient_id
     return render_template(
         "capture_simple.html",
         params=TOKENS,
@@ -324,6 +336,7 @@ def render_capture(
         confidence=confidence,
         lesion_count=lesion_count,
         inference_job_id=inference_job_id,
+        patient_id=patient_id,
         processing_settings=get_processing_settings(),
         processing_defaults=default_processing_settings(),
     )
@@ -541,17 +554,85 @@ def serve_image(filename):
     """
     # Extract only the bare filename component to prevent traversal outside
     # the images directory (e.g. "../../etc/passwd" → rejected).
-    safe_name = Path(filename).name
-    if safe_name != filename:
+    try:
+        safe_name = validated_media_filename(filename)
+    except ValueError:
         app.logger.warning("Rejected path-traversal attempt in /images: %s", filename)
         abort(400)
-    images_dir = BASE_FOLDER / "images"
-    # Confirm the resolved path stays inside the images directory.
-    resolved = (images_dir / safe_name).resolve()
-    if not str(resolved).startswith(str(images_dir.resolve())):
-        app.logger.warning("Rejected out-of-directory request in /images: %s", filename)
+    return send_from_directory(str(images_directory()), safe_name)
+
+
+@app.route("/thumbnails/<path:filename>")
+def serve_thumbnail(filename):
+    try:
+        safe_name = validated_media_filename(filename)
+    except ValueError:
+        app.logger.warning(
+            "Rejected path-traversal attempt in /thumbnails: %s", filename
+        )
         abort(400)
-    return send_from_directory(str(images_dir), safe_name)
+
+    source_path = images_directory() / safe_name
+    if not source_path.exists() or not source_path.is_file():
+        abort(404)
+
+    requested_size = request.args.get("w", THUMBNAIL_DEFAULT_SIZE, type=int)
+    size = max(THUMBNAIL_MIN_SIZE, min(THUMBNAIL_MAX_SIZE, requested_size))
+    thumbnail_bytes = cached_thumbnail_bytes(
+        safe_name,
+        size,
+        source_path.stat().st_mtime_ns,
+    )
+    if thumbnail_bytes is None:
+        return send_from_directory(str(images_directory()), safe_name)
+
+    response = Response(thumbnail_bytes, mimetype="image/jpeg")
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return response
+
+
+@app.route("/capture-gallery", methods=["GET"])
+def capture_gallery():
+    with state.lock:
+        patient_id = state.patient_id
+
+    if not patient_id:
+        return jsonify(
+            {
+                "patient_id": "",
+                "page": 1,
+                "page_size": GALLERY_DEFAULT_PAGE_SIZE,
+                "total": 0,
+                "has_more": False,
+                "items": [],
+            }
+        )
+
+    page = request.args.get("page", default=1, type=int) or 1
+    page = max(1, page)
+    page_size = request.args.get(
+        "page_size",
+        default=GALLERY_DEFAULT_PAGE_SIZE,
+        type=int,
+    ) or GALLERY_DEFAULT_PAGE_SIZE
+    page_size = max(1, min(GALLERY_MAX_PAGE_SIZE, page_size))
+
+    all_items = list_patient_capture_metadata(patient_id)
+    total = len(all_items)
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_items = all_items[start:end]
+
+    return jsonify(
+        {
+            "patient_id": patient_id,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "has_more": end < total,
+            "items": page_items,
+        }
+    )
 
 
 def save_captured_images(patient_id, images):
@@ -611,6 +692,129 @@ def build_image_write_error(image_path, image_buffer):
 
 def images_directory():
     return (BASE_FOLDER / "images").resolve()
+
+
+def validated_media_filename(value):
+    safe_name = Path(value).name
+    if safe_name != value or safe_name in {"", ".", ".."}:
+        raise ValueError(f"Invalid media filename: {value}")
+    output_path = (images_directory() / safe_name).resolve()
+    try:
+        output_path.relative_to(images_directory())
+    except ValueError as exc:
+        raise ValueError(f"Invalid media filename: {value}") from exc
+    return safe_name
+
+
+def parse_capture_filename(filename):
+    match = CAPTURE_FILENAME_RE.fullmatch(filename)
+    if match is None:
+        return None
+
+    capture_time = f"{match.group('date')}_{match.group('time')}"
+    try:
+        captured_at = datetime.strptime(capture_time, "%Y%m%d_%H%M%S%f").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        return None
+
+    return {
+        "patient_id": match.group("patient_id"),
+        "capture_number": int(match.group("capture")),
+        "captured_at": captured_at,
+    }
+
+
+def read_capture_result(image_path):
+    report_path = image_path.with_name(f"{image_path.stem}_processed_gradcam.json")
+    if not report_path.exists():
+        return None
+    try:
+        with report_path.open("r", encoding="utf-8") as report_file:
+            payload = json.load(report_file)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    predicted_grade = payload.get("predicted_dr_grade") or {}
+    lesions = payload.get("lesion_regions")
+    lesion_count = len(lesions) if isinstance(lesions, list) else None
+    confidence = predicted_grade.get("confidence")
+    if not isinstance(confidence, (int, float)):
+        confidence = None
+
+    return {
+        "dr_label": predicted_grade.get("label"),
+        "confidence": confidence,
+        "lesion_count": lesion_count,
+        "json_url": url_for("serve_image", filename=report_path.name),
+    }
+
+
+def list_patient_capture_metadata(patient_id):
+    patient_id = validated_patient_id(patient_id)
+    directory = images_directory()
+    if not directory.exists():
+        return []
+
+    metadata = []
+    for image_path in directory.glob(f"{patient_id}_*.jpg"):
+        parsed = parse_capture_filename(image_path.name)
+        if parsed is None or parsed["patient_id"] != patient_id:
+            continue
+
+        result = read_capture_result(image_path)
+        metadata.append(
+            {
+                "filename": image_path.name,
+                "patient_id": patient_id,
+                "capture_number": parsed["capture_number"],
+                "captured_at": parsed["captured_at"].isoformat(),
+                "image_url": url_for("serve_image", filename=image_path.name),
+                "thumbnail_url": url_for("serve_thumbnail", filename=image_path.name),
+                "result": {
+                    "status": "ready" if result else "pending",
+                    "dr_label": result.get("dr_label") if result else None,
+                    "confidence": result.get("confidence") if result else None,
+                    "lesion_count": result.get("lesion_count") if result else None,
+                    "json_url": result.get("json_url") if result else None,
+                },
+            }
+        )
+
+    metadata.sort(key=lambda item: item["captured_at"], reverse=True)
+    return metadata
+
+
+@lru_cache(maxsize=256)
+def cached_thumbnail_bytes(filename, max_dimension, modified_ns):
+    _ = modified_ns
+    image_path = images_directory() / filename
+    frame = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if frame is None:
+        return None
+
+    height, width = frame.shape[:2]
+    largest_dimension = max(height, width)
+    if largest_dimension > max_dimension:
+        scale = max_dimension / float(largest_dimension)
+        resized = cv2.resize(
+            frame,
+            (
+                max(1, int(round(width * scale))),
+                max(1, int(round(height * scale))),
+            ),
+            interpolation=cv2.INTER_AREA,
+        )
+    else:
+        resized = frame
+
+    encoded_ok, encoded = cv2.imencode(
+        ".jpg", resized, [int(cv2.IMWRITE_JPEG_QUALITY), 72]
+    )
+    if not encoded_ok:
+        return None
+    return encoded.tobytes()
 
 
 def open_captured_image_file(image_filename):

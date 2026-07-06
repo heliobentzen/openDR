@@ -26,6 +26,16 @@ DEFAULT_PROCESSING_SETTINGS = {
 }
 
 
+def _coerce_setting(
+    value: Any,
+    fallback: int,
+) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
 def normalize_processing_settings(
     processing_settings: Mapping[str, Any] | None = None,
 ) -> dict[str, int]:
@@ -34,10 +44,18 @@ def normalize_processing_settings(
         settings.update(processing_settings)
 
     return {
-        "brightness": int(np.clip(settings["brightness"], -100, 100)),
-        "contrast": int(np.clip(settings["contrast"], 50, 180)),
-        "fundus_threshold": int(np.clip(settings["fundus_threshold"], 0, 255)),
-        "glare_threshold": int(np.clip(settings["glare_threshold"], 50, 100)),
+        "brightness": int(
+            np.clip(_coerce_setting(settings["brightness"], 0), -100, 100)
+        ),
+        "contrast": int(
+            np.clip(_coerce_setting(settings["contrast"], 100), 50, 180)
+        ),
+        "fundus_threshold": int(
+            np.clip(_coerce_setting(settings["fundus_threshold"], 65), 0, 255)
+        ),
+        "glare_threshold": int(
+            np.clip(_coerce_setting(settings["glare_threshold"], 90), 50, 100)
+        ),
     }
 
 

@@ -37,7 +37,7 @@ _DILATE_KERNEL: Final[np.ndarray] = cv2.getStructuringElement(
 )
 
 
-def remove_glare(im: np.ndarray) -> np.ndarray:
+def remove_glare(im: np.ndarray, saturation_threshold: float = _SAT_THRESHOLD) -> np.ndarray:
     """Remove direct specular LED reflections from a retinal image.
 
     Generates a binary mask by thresholding the green channel within a
@@ -77,8 +77,9 @@ def remove_glare(im: np.ndarray) -> np.ndarray:
 
     # Threshold the green channel of the crop to locate saturated pixels.
     green_crop: np.ndarray = im[y0:y1, x0:x1, 1]
+    effective_threshold = float(np.clip(saturation_threshold, 0.0, 1.0))
     _ret, temp_mask = cv2.threshold(
-        green_crop, _SAT_THRESHOLD * 256, 255, cv2.THRESH_BINARY
+        green_crop, effective_threshold * 256, 255, cv2.THRESH_BINARY
     )
 
     temp_mask = cv2.dilate(
@@ -96,4 +97,3 @@ def remove_glare(im: np.ndarray) -> np.ndarray:
     )
 
     return im
-

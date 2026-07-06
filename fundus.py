@@ -20,7 +20,12 @@ import cv2
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 from Fundus_Cam import Fundus_Cam
-from modules.process import grade, grade_with_explanation
+from modules.process import (
+    DEFAULT_PROCESSING_SETTINGS,
+    grade,
+    grade_with_explanation,
+    normalize_processing_settings,
+)
 
 try:
     import pigpio
@@ -56,6 +61,10 @@ switch = 4
 pi = None
 
 
+def default_processing_settings():
+    return dict(DEFAULT_PROCESSING_SETTINGS)
+
+
 class CameraSessionState:
     def __init__(self):
         self.lock = Lock()
@@ -63,11 +72,13 @@ class CameraSessionState:
         self.last_img = None
         self.inference_job_id = None
         self.patient_id = ""
+        self.processing_settings = default_processing_settings()
 
     def reset(self):
         self.inference_job_id = None
         self.patient_id = ""
         self.last_img = None
+        self.processing_settings = default_processing_settings()
 
     def stop_camera(self):
         if self.camera is not None:
@@ -84,6 +95,30 @@ inference_executor = ThreadPoolExecutor(
     max_workers=INFERENCE_WORKER_COUNT,
     thread_name_prefix="inference",
 )
+
+
+def get_processing_settings():
+    with state.lock:
+        return dict(state.processing_settings)
+
+
+def update_processing_settings_from_request(form_data):
+    current_settings = get_processing_settings()
+    updated_settings = normalize_processing_settings(
+        {
+            "brightness": form_data.get("brightness", current_settings["brightness"]),
+            "contrast": form_data.get("contrast", current_settings["contrast"]),
+            "fundus_threshold": form_data.get(
+                "fundus_threshold", current_settings["fundus_threshold"]
+            ),
+            "glare_threshold": form_data.get(
+                "glare_threshold", current_settings["glare_threshold"]
+            ),
+        }
+    )
+    with state.lock:
+        state.processing_settings = updated_settings
+    return updated_settings
 
 
 @atexit.register
@@ -117,6 +152,8 @@ def my_form_post():
 def captureSimpleFunc():
     if request.method == "GET":
         return render_capture()
+
+    processing_settings = update_processing_settings_from_request(request.form)
 
     if "d" not in request.form:
         return render_capture()
@@ -160,7 +197,7 @@ def captureSimpleFunc():
         if last_img is None:
             return render_capture("NO IMAGE SPECIFIED")
 
-        grade_result = str(grade(last_img))[:4]
+        grade_result = str(grade(last_img, processing_settings=processing_settings))[:4]
         print("the grade is " + grade_result)
         return render_capture(grade_result)
 
@@ -178,7 +215,12 @@ def captureSimpleFunc():
         with state.lock:
             state.inference_job_id = job_id
 
-        inference_executor.submit(run_explanation_job, job_id, last_img)
+        inference_executor.submit(
+            run_explanation_job,
+            job_id,
+            last_img,
+            dict(processing_settings),
+        )
         return render_capture("PROCESSANDO...", inference_job_id=job_id)
 
     if d == "Switch":
@@ -282,6 +324,8 @@ def render_capture(
         confidence=confidence,
         lesion_count=lesion_count,
         inference_job_id=inference_job_id,
+        processing_settings=get_processing_settings(),
+        processing_defaults=default_processing_settings(),
     )
 
 
@@ -459,7 +503,7 @@ def serialize_inference_job(job):
     }
 
 
-def run_explanation_job(job_id, image_path):
+def run_explanation_job(job_id, image_path, processing_settings):
     def status_callback(step_name, **payload):
         if step_name == "preprocessing":
             advance_inference_job(job_id, "preprocessing", next_step="inference", **payload)
@@ -469,7 +513,11 @@ def run_explanation_job(job_id, image_path):
             advance_inference_job(job_id, "report", **payload)
 
     try:
-        grade_with_explanation(image_path, status_callback=status_callback)
+        grade_with_explanation(
+            image_path,
+            status_callback=status_callback,
+            processing_settings=processing_settings,
+        )
     except RuntimeError as exc:
         app.logger.exception("Inference job %s failed during processing.", job_id)
         fail_inference_job(job_id, f"GRAD-CAM ERROR: {exc}")

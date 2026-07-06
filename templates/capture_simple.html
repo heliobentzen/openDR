@@ -9,7 +9,7 @@
 
 <body class="h-screen bg-slate-950 text-white flex overflow-hidden">
 
-  <aside class="bg-slate-900 border-r border-slate-700 flex flex-col items-center gap-2 p-3 w-28 shrink-0">
+  <aside class="bg-slate-900 border-r border-slate-700 flex flex-col gap-3 p-3 w-80 shrink-0 overflow-y-auto">
     <p class="text-slate-500 text-[10px] uppercase tracking-widest mb-1">Controls</p>
     {% set icon_button_names = ["Flip", "Vid", "Click", "Switch", "Shut"] %}
     {% for o in params %}
@@ -17,6 +17,10 @@
       {% if o == "Click" %}
       <input type="hidden" name="focus_ok" id="focus-ok-input" value="0">
       {% endif %}
+      <input type="hidden" name="brightness" value="{{ processing_settings.brightness }}" data-processing-input="brightness">
+      <input type="hidden" name="contrast" value="{{ processing_settings.contrast }}" data-processing-input="contrast">
+      <input type="hidden" name="fundus_threshold" value="{{ processing_settings.fundus_threshold }}" data-processing-input="fundus_threshold">
+      <input type="hidden" name="glare_threshold" value="{{ processing_settings.glare_threshold }}" data-processing-input="glare_threshold">
       <button
         name="d"
         value="{{ o }}"
@@ -41,6 +45,75 @@
       </button>
     </form>
     {% endfor %}
+
+    <section class="rounded-2xl border border-slate-700 bg-slate-950/80 p-4 space-y-4">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <p class="text-slate-500 text-[10px] uppercase tracking-widest">Ajustes de imagem</p>
+          <h2 class="mt-1 text-sm font-semibold text-white">Ajustes em tempo real</h2>
+        </div>
+        <button
+          type="button"
+          id="reset-processing"
+          class="rounded-lg border border-slate-600 px-2.5 py-1 text-[11px] font-semibold text-slate-200 transition hover:border-slate-500 hover:bg-slate-800"
+        >
+          Resetar
+        </button>
+      </div>
+
+      <div class="flex gap-2">
+        <button
+          type="button"
+          id="preview-mode-adjusted"
+          data-preview-mode="adjusted"
+          class="flex-1 rounded-lg border border-amber-500 bg-amber-500/15 px-3 py-2 text-xs font-semibold text-amber-300 transition"
+        >
+          Ajustada
+        </button>
+        <button
+          type="button"
+          id="preview-mode-threshold"
+          data-preview-mode="threshold"
+          class="flex-1 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-slate-500 hover:bg-slate-800"
+        >
+          Limiar
+        </button>
+      </div>
+
+      <div class="space-y-4">
+        <label class="block">
+          <div class="mb-1 flex items-center justify-between text-xs text-slate-300">
+            <span>Brilho</span>
+            <span id="brightness-value">{{ processing_settings.brightness }}</span>
+          </div>
+          <input id="brightness-slider" type="range" min="-100" max="100" step="1" value="{{ processing_settings.brightness }}" class="w-full accent-amber-400">
+        </label>
+
+        <label class="block">
+          <div class="mb-1 flex items-center justify-between text-xs text-slate-300">
+            <span>Contraste</span>
+            <span id="contrast-value">{{ "%.2f"|format(processing_settings.contrast / 100) }}x</span>
+          </div>
+          <input id="contrast-slider" type="range" min="50" max="180" step="1" value="{{ processing_settings.contrast }}" class="w-full accent-amber-400">
+        </label>
+
+        <label class="block">
+          <div class="mb-1 flex items-center justify-between text-xs text-slate-300">
+            <span>Limiar do fundo</span>
+            <span id="fundus-threshold-value">{{ processing_settings.fundus_threshold }}</span>
+          </div>
+          <input id="fundus-threshold-slider" type="range" min="0" max="255" step="1" value="{{ processing_settings.fundus_threshold }}" class="w-full accent-amber-400">
+        </label>
+
+        <label class="block">
+          <div class="mb-1 flex items-center justify-between text-xs text-slate-300">
+            <span>Limiar de reflexo</span>
+            <span id="glare-threshold-value">{{ processing_settings.glare_threshold }}%</span>
+          </div>
+          <input id="glare-threshold-slider" type="range" min="50" max="100" step="1" value="{{ processing_settings.glare_threshold }}" class="w-full accent-amber-400">
+        </label>
+      </div>
+    </section>
   </aside>
 
   <main class="flex-1 flex overflow-hidden">
@@ -55,7 +128,8 @@
       </div>
 
       <div class="flex-1 flex items-center justify-center bg-black relative overflow-hidden">
-        <img id="preview-frame" alt="Pré-visualização da retina" class="w-full h-full object-contain">
+        <img id="preview-frame" alt="Pré-visualização da retina" class="hidden">
+        <canvas id="preview-canvas" class="max-w-full max-h-full"></canvas>
         <canvas id="analysis-canvas" class="hidden"></canvas>
         <p id="preview-status" class="sr-only" role="status" aria-live="polite"></p>
         <div
@@ -106,6 +180,10 @@
       id="workflow-panel"
       data-inference-job-id="{{ inference_job_id or '' }}"
       data-poll-interval-ms="1000"
+      data-default-brightness="{{ processing_defaults.brightness }}"
+      data-default-contrast="{{ processing_defaults.contrast }}"
+      data-default-fundus-threshold="{{ processing_defaults.fundus_threshold }}"
+      data-default-glare-threshold="{{ processing_defaults.glare_threshold }}"
       class="w-[22rem] shrink-0 border-l border-slate-700 bg-slate-900/95 p-4 flex flex-col gap-4 overflow-y-auto"
     >
       <div>
@@ -158,7 +236,8 @@
   (() => {
     const elements = {
       preview: document.getElementById('preview-frame'),
-      canvas: document.getElementById('analysis-canvas'),
+      previewCanvas: document.getElementById('preview-canvas'),
+      analysisCanvas: document.getElementById('analysis-canvas'),
       overlay: document.getElementById('focus-overlay'),
       captureButton: document.getElementById('capture-button'),
       focusInput: document.getElementById('focus-ok-input'),
@@ -173,6 +252,17 @@
       reportLabel: document.getElementById('report-label'),
       reportConfidence: document.getElementById('report-confidence'),
       reportLesions: document.getElementById('report-lesions'),
+      brightnessSlider: document.getElementById('brightness-slider'),
+      contrastSlider: document.getElementById('contrast-slider'),
+      fundusThresholdSlider: document.getElementById('fundus-threshold-slider'),
+      glareThresholdSlider: document.getElementById('glare-threshold-slider'),
+      brightnessValue: document.getElementById('brightness-value'),
+      contrastValue: document.getElementById('contrast-value'),
+      fundusThresholdValue: document.getElementById('fundus-threshold-value'),
+      glareThresholdValue: document.getElementById('glare-threshold-value'),
+      resetProcessingButton: document.getElementById('reset-processing'),
+      adjustedPreviewButton: document.getElementById('preview-mode-adjusted'),
+      thresholdPreviewButton: document.getElementById('preview-mode-threshold'),
     };
 
     const missingElementNames = Object.entries(elements)
@@ -186,7 +276,8 @@
 
     const {
       preview,
-      canvas,
+      previewCanvas,
+      analysisCanvas,
       overlay,
       captureButton,
       focusInput,
@@ -201,11 +292,27 @@
       reportLabel,
       reportConfidence,
       reportLesions,
+      brightnessSlider,
+      contrastSlider,
+      fundusThresholdSlider,
+      glareThresholdSlider,
+      brightnessValue,
+      contrastValue,
+      fundusThresholdValue,
+      glareThresholdValue,
+      resetProcessingButton,
+      adjustedPreviewButton,
+      thresholdPreviewButton,
     } = elements;
     const explainButton = document.getElementById('explain-button');
 
-    const context = canvas.getContext('2d', { willReadFrequently: true });
+    const analysisContext = analysisCanvas.getContext('2d', { willReadFrequently: true });
+    const previewContext = previewCanvas.getContext('2d', { willReadFrequently: true });
+    const workingCanvas = document.createElement('canvas');
+    const workingContext = workingCanvas.getContext('2d', { willReadFrequently: true });
+    const processingInputs = document.querySelectorAll('[data-processing-input]');
     const PREVIEW_UPDATE_INTERVAL_MS = 500;
+    const MAX_RENDER_DIMENSION = 480;
     const INFERENCE_POLL_INTERVAL_MS = parseInt(
       workflowPanel.dataset.pollIntervalMs || '1000',
       10,
@@ -244,8 +351,23 @@
       },
     };
 
+    const defaultProcessingSettings = {
+      brightness: parseInt(workflowPanel.dataset.defaultBrightness || '0', 10),
+      contrast: parseInt(workflowPanel.dataset.defaultContrast || '100', 10),
+      fundusThreshold: parseInt(workflowPanel.dataset.defaultFundusThreshold || '65', 10),
+      glareThreshold: parseInt(workflowPanel.dataset.defaultGlareThreshold || '90', 10),
+    };
+    const processingSettings = {
+      brightness: parseInt(brightnessSlider.value, 10),
+      contrast: parseInt(contrastSlider.value, 10),
+      fundusThreshold: parseInt(fundusThresholdSlider.value, 10),
+      glareThreshold: parseInt(glareThresholdSlider.value, 10),
+    };
+
     let inferenceJobId = workflowPanel.dataset.inferenceJobId || '';
     let inferencePollTimer = null;
+    let previewMode = 'adjusted';
+    let previewRenderFrame = null;
 
     const setFocusState = (isReady) => {
       captureButton.disabled = !isReady;
@@ -338,6 +460,105 @@
       reportLesions.textContent = result.lesion_count ?? 'N/A';
     };
 
+    const syncProcessingInputs = () => {
+      processingInputs.forEach((input) => {
+        if (input.name === 'brightness') {
+          input.value = processingSettings.brightness;
+        } else if (input.name === 'contrast') {
+          input.value = processingSettings.contrast;
+        } else if (input.name === 'fundus_threshold') {
+          input.value = processingSettings.fundusThreshold;
+        } else if (input.name === 'glare_threshold') {
+          input.value = processingSettings.glareThreshold;
+        }
+      });
+    };
+
+    const updateControlLabels = () => {
+      brightnessValue.textContent = processingSettings.brightness;
+      contrastValue.textContent = `${(processingSettings.contrast / 100).toFixed(2)}x`;
+      fundusThresholdValue.textContent = processingSettings.fundusThreshold;
+      glareThresholdValue.textContent = `${processingSettings.glareThreshold}%`;
+    };
+
+    const setPreviewMode = (mode) => {
+      previewMode = mode;
+      const isAdjusted = mode === 'adjusted';
+      adjustedPreviewButton.className = isAdjusted
+        ? 'flex-1 rounded-lg border border-amber-500 bg-amber-500/15 px-3 py-2 text-xs font-semibold text-amber-300 transition'
+        : 'flex-1 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-slate-500 hover:bg-slate-800';
+      thresholdPreviewButton.className = !isAdjusted
+        ? 'flex-1 rounded-lg border border-amber-500 bg-amber-500/15 px-3 py-2 text-xs font-semibold text-amber-300 transition'
+        : 'flex-1 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-slate-500 hover:bg-slate-800';
+      schedulePreviewRender();
+    };
+
+    const renderPreview = () => {
+      if (!preview.naturalWidth || !preview.naturalHeight || !previewContext || !workingContext) {
+        return;
+      }
+
+      const scale = Math.min(
+        1,
+        MAX_RENDER_DIMENSION / Math.max(preview.naturalWidth, preview.naturalHeight),
+      );
+      const width = Math.max(1, Math.round(preview.naturalWidth * scale));
+      const height = Math.max(1, Math.round(preview.naturalHeight * scale));
+      if (previewCanvas.width !== width || previewCanvas.height !== height) {
+        previewCanvas.width = width;
+        previewCanvas.height = height;
+      }
+      if (workingCanvas.width !== width || workingCanvas.height !== height) {
+        workingCanvas.width = width;
+        workingCanvas.height = height;
+      }
+
+      workingContext.drawImage(preview, 0, 0, width, height);
+      const frame = workingContext.getImageData(0, 0, width, height);
+      const { data } = frame;
+      const contrast = processingSettings.contrast / 100;
+      const brightness = processingSettings.brightness;
+      const glareThreshold = (processingSettings.glareThreshold / 100) * 255;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const red = Math.max(0, Math.min(255, (data[i] * contrast) + brightness));
+        const green = Math.max(0, Math.min(255, (data[i + 1] * contrast) + brightness));
+        const blue = Math.max(0, Math.min(255, (data[i + 2] * contrast) + brightness));
+        const gray = (0.299 * red) + (0.587 * green) + (0.114 * blue);
+
+        if (previewMode === 'threshold') {
+          const binaryValue = gray >= processingSettings.fundusThreshold ? 255 : 0;
+          data[i] = binaryValue;
+          data[i + 1] = binaryValue;
+          data[i + 2] = binaryValue;
+          continue;
+        }
+
+        data[i] = red;
+        data[i + 1] = green;
+        data[i + 2] = blue;
+
+        if (Math.max(red, green, blue) >= glareThreshold) {
+          data[i] = 255;
+          data[i + 1] = Math.min(255, green + 40);
+          data[i + 2] = Math.max(0, blue - 70);
+        }
+      }
+
+      previewContext.putImageData(frame, 0, 0);
+    };
+
+    const schedulePreviewRender = () => {
+      if (previewRenderFrame !== null) {
+        return;
+      }
+
+      previewRenderFrame = window.requestAnimationFrame(() => {
+        previewRenderFrame = null;
+        renderPreview();
+      });
+    };
+
     const stopInferencePolling = () => {
       if (inferencePollTimer) {
         clearInterval(inferencePollTimer);
@@ -409,11 +630,11 @@
     const detectEyeInFocus = () => {
       const width = 176;
       const height = 132;
-      canvas.width = width;
-      canvas.height = height;
-      context.drawImage(preview, 0, 0, width, height);
+      analysisCanvas.width = width;
+      analysisCanvas.height = height;
+      analysisContext.drawImage(preview, 0, 0, width, height);
 
-      const { data } = context.getImageData(0, 0, width, height);
+      const { data } = analysisContext.getImageData(0, 0, width, height);
       const gray = new Float32Array(width * height);
       let darkCount = 0;
       let minX = width;
@@ -496,6 +717,7 @@
           preview.src = objectUrl;
         });
         previewStatus.textContent = '';
+        schedulePreviewRender();
         setFocusState(detectEyeInFocus());
       } catch (error) {
         console.warn('Falha ao atualizar pré-visualização da câmera:', error);
@@ -504,6 +726,40 @@
       }
     };
 
+    const bindSlider = (slider, property) => {
+      slider.addEventListener('input', () => {
+        processingSettings[property] = parseInt(slider.value, 10);
+        syncProcessingInputs();
+        updateControlLabels();
+        schedulePreviewRender();
+      });
+    };
+
+    bindSlider(brightnessSlider, 'brightness');
+    bindSlider(contrastSlider, 'contrast');
+    bindSlider(fundusThresholdSlider, 'fundusThreshold');
+    bindSlider(glareThresholdSlider, 'glareThreshold');
+
+    resetProcessingButton.addEventListener('click', () => {
+      brightnessSlider.value = defaultProcessingSettings.brightness;
+      contrastSlider.value = defaultProcessingSettings.contrast;
+      fundusThresholdSlider.value = defaultProcessingSettings.fundusThreshold;
+      glareThresholdSlider.value = defaultProcessingSettings.glareThreshold;
+      processingSettings.brightness = defaultProcessingSettings.brightness;
+      processingSettings.contrast = defaultProcessingSettings.contrast;
+      processingSettings.fundusThreshold = defaultProcessingSettings.fundusThreshold;
+      processingSettings.glareThreshold = defaultProcessingSettings.glareThreshold;
+      syncProcessingInputs();
+      updateControlLabels();
+      schedulePreviewRender();
+    });
+
+    adjustedPreviewButton.addEventListener('click', () => setPreviewMode('adjusted'));
+    thresholdPreviewButton.addEventListener('click', () => setPreviewMode('threshold'));
+
+    syncProcessingInputs();
+    updateControlLabels();
+    setPreviewMode('adjusted');
     setFocusState(false);
     updatePreview();
     setInterval(updatePreview, PREVIEW_UPDATE_INTERVAL_MS);

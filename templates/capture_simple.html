@@ -11,7 +11,16 @@
 
   <aside class="bg-slate-900 border-r border-slate-700 flex flex-col gap-3 p-3 w-80 shrink-0 overflow-y-auto">
     <p class="text-slate-500 text-[10px] uppercase tracking-widest mb-1">Controls</p>
+    {% if not camera_available %}
+    <div
+      class="w-full rounded-xl border border-amber-700 bg-amber-950/40 px-3 py-2 text-[11px] text-amber-300"
+      role="status"
+    >
+      {{ camera_warning or "Câmera indisponível - você ainda pode enviar fotos para análise" }}
+    </div>
+    {% endif %}
     {% set icon_button_names = ["Flip", "Vid", "Click", "Switch", "Shut"] %}
+    {% set camera_dependent_names = ["Flip", "Vid"] %}
     {% for o in params %}
     <form method="post" class="w-full">
       {% if o == "Click" %}
@@ -26,12 +35,13 @@
         value="{{ o }}"
         {% if o == "Click" %}id="capture-button"{% endif %}
         {% if o == "Explain" %}id="explain-button"{% endif %}
-        {% if o == "Click" %}disabled aria-disabled="true"{% endif %}
+        {% if o == "Click" %}disabled aria-disabled="true"
+        {% elif o in camera_dependent_names and not camera_available %}disabled aria-disabled="true"{% endif %}
         class="group w-full flex flex-col items-center gap-1.5 py-2.5 px-1 rounded-xl border font-semibold text-[11px] text-center cursor-pointer select-none transition-all duration-150 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900
           {% if o == "Click" %}bg-amber-500 border-amber-400 text-slate-900 hover:bg-amber-400 shadow-md shadow-amber-500/20 hover:shadow-amber-400/30 focus-visible:ring-amber-400 disabled:bg-slate-700 disabled:border-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed disabled:shadow-none disabled:scale-100
           {% elif o == "Explain" %}bg-teal-700 border-teal-600 text-white hover:bg-teal-600 shadow-md shadow-teal-700/20 hover:shadow-teal-600/30 focus-visible:ring-teal-400
           {% elif o == "Shut" %}bg-rose-950 border-rose-800 text-rose-300 hover:bg-rose-900 hover:border-rose-700 focus-visible:ring-rose-500
-          {% else %}bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 hover:border-slate-600 focus-visible:ring-slate-400{% endif %}"
+          {% else %}bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 hover:border-slate-600 focus-visible:ring-slate-400 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-slate-800 disabled:hover:border-slate-700{% endif %}"
       >
         {% if o in icon_button_names %}
         <img
@@ -45,6 +55,59 @@
       </button>
     </form>
     {% endfor %}
+
+    <form
+      method="post"
+      action="{{ url_for('upload_image') }}"
+      enctype="multipart/form-data"
+      id="upload-form"
+      data-max-bytes="{{ max_upload_bytes }}"
+      data-allowed-extensions="{{ upload_allowed_extensions | join(',') }}"
+      class="w-full rounded-2xl border border-indigo-800 bg-slate-800/60 p-3 space-y-2"
+    >
+      <p class="text-slate-500 text-[10px] uppercase tracking-widest text-center">Enviar foto</p>
+
+      <label
+        id="upload-dropzone"
+        for="upload-input"
+        class="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-slate-600 bg-slate-900/60 px-3 py-4 text-center cursor-pointer transition-colors hover:border-indigo-500 hover:bg-slate-900"
+      >
+        <img
+          id="upload-preview-img"
+          alt="Pré-visualização da foto selecionada"
+          class="hidden max-h-24 w-auto rounded-lg border border-slate-700 object-cover"
+        >
+        <svg id="upload-dropzone-icon" class="w-6 h-6 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+        </svg>
+        <span id="upload-dropzone-text" class="text-[11px] text-slate-400">
+          Arraste uma foto aqui ou <span class="text-indigo-400 underline">selecione um arquivo</span>
+        </span>
+        <span id="upload-filename" class="hidden text-[10px] text-slate-300 truncate max-w-full"></span>
+      </label>
+
+      <input
+        id="upload-input"
+        type="file"
+        name="image"
+        accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+        required
+        aria-label="Selecionar foto da retina para análise"
+        class="sr-only"
+      >
+      <p id="upload-error" class="hidden text-[11px] text-rose-400" role="alert"></p>
+
+      <button
+        type="submit"
+        id="upload-submit"
+        class="w-full inline-flex items-center justify-center gap-1.5 rounded-xl border border-indigo-500 bg-indigo-600 py-2 text-[11px] font-semibold text-white transition-all duration-150 hover:bg-indigo-500 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+        </svg>
+        <span id="upload-submit-label">Analisar foto enviada</span>
+      </button>
+    </form>
 
     <section class="rounded-2xl border border-slate-700 bg-slate-950/80 p-4 space-y-4">
       <div class="flex items-start justify-between gap-3">
@@ -180,6 +243,7 @@
       id="workflow-panel"
       data-inference-job-id="{{ inference_job_id or '' }}"
       data-patient-id="{{ patient_id or '' }}"
+      data-camera-available="{{ 'true' if camera_available else 'false' }}"
       data-poll-interval-ms="1000"
       data-default-brightness="{{ processing_defaults.brightness }}"
       data-default-contrast="{{ processing_defaults.contrast }}"
@@ -987,10 +1051,121 @@
     updateControlLabels();
     setPreviewMode('adjusted');
     setFocusState(false);
-    updatePreview();
-    setInterval(updatePreview, PREVIEW_UPDATE_INTERVAL_MS);
+    if (workflowPanel.dataset.cameraAvailable === 'true') {
+      updatePreview();
+      setInterval(updatePreview, PREVIEW_UPDATE_INTERVAL_MS);
+    } else {
+      previewStatus.textContent = 'Câmera indisponível.';
+    }
     startInferencePolling();
     fetchGalleryPage(1, false);
+  })();
+</script>
+<script>
+  (() => {
+    const form = document.getElementById('upload-form');
+    const input = document.getElementById('upload-input');
+    const dropzone = document.getElementById('upload-dropzone');
+    const previewImg = document.getElementById('upload-preview-img');
+    const dropzoneText = document.getElementById('upload-dropzone-text');
+    const filenameLabel = document.getElementById('upload-filename');
+    const errorText = document.getElementById('upload-error');
+    const submitButton = document.getElementById('upload-submit');
+    const submitLabel = document.getElementById('upload-submit-label');
+
+    if (!form || !input || !dropzone || !previewImg || !dropzoneText
+      || !filenameLabel || !errorText || !submitButton || !submitLabel) {
+      return;
+    }
+
+    const maxBytes = parseInt(form.dataset.maxBytes || '0', 10) || Infinity;
+    const allowedExtensions = (form.dataset.allowedExtensions || '')
+      .split(',')
+      .map((ext) => ext.trim().toLowerCase())
+      .filter(Boolean);
+
+    let previewObjectUrl = null;
+
+    const showError = (message) => {
+      errorText.textContent = message;
+      errorText.classList.remove('hidden');
+      submitButton.disabled = true;
+    };
+
+    const clearError = () => {
+      errorText.textContent = '';
+      errorText.classList.add('hidden');
+      submitButton.disabled = false;
+    };
+
+    const hasAllowedExtension = (filename) => {
+      const lower = filename.toLowerCase();
+      return allowedExtensions.some((ext) => lower.endsWith(ext));
+    };
+
+    const applySelectedFile = (file) => {
+      if (!file) {
+        return;
+      }
+      if (!hasAllowedExtension(file.name)) {
+        showError('Formato inválido - envie um arquivo JPG ou PNG.');
+        return;
+      }
+      if (file.size > maxBytes) {
+        const maxMb = (maxBytes / (1024 * 1024)).toFixed(0);
+        showError(`Arquivo muito grande - o máximo é ${maxMb} MB.`);
+        return;
+      }
+
+      clearError();
+      filenameLabel.textContent = file.name;
+      filenameLabel.classList.remove('hidden');
+      dropzoneText.classList.add('hidden');
+
+      if (previewObjectUrl) {
+        URL.revokeObjectURL(previewObjectUrl);
+      }
+      previewObjectUrl = URL.createObjectURL(file);
+      previewImg.src = previewObjectUrl;
+      previewImg.classList.remove('hidden');
+    };
+
+    input.addEventListener('change', () => {
+      applySelectedFile(input.files && input.files[0]);
+    });
+
+    ['dragenter', 'dragover'].forEach((eventName) => {
+      dropzone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropzone.classList.add('border-indigo-500', 'bg-slate-900');
+      });
+    });
+
+    ['dragleave', 'drop'].forEach((eventName) => {
+      dropzone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropzone.classList.remove('border-indigo-500', 'bg-slate-900');
+      });
+    });
+
+    dropzone.addEventListener('drop', (event) => {
+      const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+      if (!file) {
+        return;
+      }
+      input.files = event.dataTransfer.files;
+      applySelectedFile(file);
+    });
+
+    form.addEventListener('submit', (event) => {
+      if (!input.files || !input.files[0]) {
+        event.preventDefault();
+        showError('Selecione uma foto antes de enviar.');
+        return;
+      }
+      submitButton.disabled = true;
+      submitLabel.textContent = 'Enviando...';
+    });
   })();
 </script>
 </html>

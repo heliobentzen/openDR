@@ -261,13 +261,11 @@ class RetinaCamera:
         lab_enhanced = cv2.merge((l_enhanced, a_ch, b_ch))
         return cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
 
-    def _capture_jpeg_buffer(self) -> np.ndarray:
-        """Capture a single frame, enhance contrast, and return a JPEG buffer.
+    def _read_raw_frame(self) -> np.ndarray:
+        """Grab one raw BGR frame from the sensor, applying flip and fault checks.
 
-        Returns
-        -------
-        np.ndarray
-            1-D ``uint8`` array containing the raw JPEG bytes.
+        Shared by :meth:`_capture_jpeg_buffer` and :meth:`capture_preview` so
+        disconnect/overheat detection lives in exactly one place.
 
         Raises
         ------
@@ -277,8 +275,6 @@ class RetinaCamera:
             If a thermal fault is detected (heuristic: ISP returns an
             all-zero frame, which is the observed behaviour on overheating
             Pi hardware).
-        RuntimeError
-            If OpenCV cannot encode the frame as a JPEG.
         """
         self._assert_ready()
 
@@ -309,6 +305,26 @@ class RetinaCamera:
         if self._flip_state:
             frame = cv2.flip(frame, 0)
 
+        return frame
+
+    def _capture_jpeg_buffer(self) -> np.ndarray:
+        """Capture a single frame, enhance contrast, and return a JPEG buffer.
+
+        Returns
+        -------
+        np.ndarray
+            1-D ``uint8`` array containing the raw JPEG bytes.
+
+        Raises
+        ------
+        CameraDisconnectedError
+            If the camera stops responding during the capture.
+        CameraOverheatError
+            If a thermal fault is detected.
+        RuntimeError
+            If OpenCV cannot encode the frame as a JPEG.
+        """
+        frame = self._read_raw_frame()
         enhanced = self._apply_contrast_enhancement(frame)
 
         encode_params = [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality]
@@ -316,6 +332,62 @@ class RetinaCamera:
         if not encode_success:
             raise RuntimeError(
                 "Unable to encode camera frame as JPEG. "
+                "Check camera connection and frame data."
+            )
+
+        return np.frombuffer(image_bytes.tobytes(), dtype=np.uint8)
+
+    def capture_preview(
+        self, max_dimension: int = 640, jpeg_quality: int = 80
+    ) -> np.ndarray:
+        """Capture a reduced-size, contrast-enhanced preview frame as JPEG bytes.
+
+        The frame is downscaled *before* CLAHE is applied, so the enhancement
+        pass runs on the small preview-sized array rather than the full
+        sensor resolution — this keeps the endpoint safe to poll at
+        interactive rates (see ``PREVIEW_MIN_INTERVAL_S`` in ``fundus.py``).
+
+        Parameters
+        ----------
+        max_dimension:
+            Maximum width or height for the preview image.
+        jpeg_quality:
+            JPEG quality used during encoding (0-100).
+
+        Returns
+        -------
+        np.ndarray
+            1-D ``uint8`` array containing the encoded JPEG bytes.
+
+        Raises
+        ------
+        CameraDisconnectedError
+            If the camera is not running or disconnects during capture.
+        CameraOverheatError
+            If a thermal fault is detected.
+        RuntimeError
+            If OpenCV cannot encode the frame as a JPEG.
+        """
+        frame = self._read_raw_frame()
+
+        height, width = frame.shape[:2]
+        largest_dimension = max(height, width)
+        if largest_dimension > max_dimension:
+            scale = max_dimension / float(largest_dimension)
+            frame = cv2.resize(
+                frame,
+                (int(width * scale), int(height * scale)),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        enhanced = self._apply_contrast_enhancement(frame)
+
+        encode_success, image_bytes = cv2.imencode(
+            ".jpg", enhanced, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
+        )
+        if not encode_success:
+            raise RuntimeError(
+                "Unable to encode camera preview frame as JPEG. "
                 "Check camera connection and frame data."
             )
 

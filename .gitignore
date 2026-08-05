@@ -6,3 +6,7 @@
 
 # Node.js (Tailwind CSS build tooling)
 node_modules/
+
+# Glaucoma screening checkpoint (~111 MB, fetched via
+# tools/download_glaucoma_model.py, not committed to the repo)
+models/*.pt

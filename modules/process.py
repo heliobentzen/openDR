@@ -64,6 +64,15 @@ def apply_processing_settings(
     processing_settings: Mapping[str, Any] | None = None,
 ) -> np.ndarray:
     settings = normalize_processing_settings(processing_settings)
+    return _apply_normalized_settings(image, settings)
+
+
+def _apply_normalized_settings(image: np.ndarray, settings: Mapping[str, int]) -> np.ndarray:
+    # brightness=0/contrast=100 (the default) is a no-op, and the default UI
+    # settings are the common case — skip the full-resolution float32
+    # conversion entirely rather than doing (image * 1.0) + 0 on every request.
+    if settings["brightness"] == 0 and settings["contrast"] == 100:
+        return image
     adjusted = image.astype(np.float32)
     adjusted = (adjusted * (settings["contrast"] / 100.0)) + settings["brightness"]
     return np.clip(adjusted, 0, 255).astype(np.uint8)
@@ -78,7 +87,7 @@ def prepare_processed_image(
         raise FileNotFoundError(f"Cannot read image file: {filename!r}")
 
     settings = normalize_processing_settings(processing_settings)
-    adjusted = apply_processing_settings(source_image, settings)
+    adjusted = _apply_normalized_settings(source_image, settings)
     extracted = extract_fundus_from_image(
         adjusted,
         threshold_value=settings["fundus_threshold"],
@@ -94,7 +103,7 @@ def grade(filename: str, processing_settings: Mapping[str, Any] | None = None) -
 
     The pipeline consists of three steps:
 
-    1. **Extraction** – :func:`~modules.extract.extract_fundus` isolates the
+    1. **Extraction** – :func:`~modules.extract.extract_fundus_from_image` isolates the
        retinal disc by applying a circular crop followed by an ellipse-fitted
        mask.
     2. **Glare removal** – :func:`~modules.remove_glare.remove_glare`

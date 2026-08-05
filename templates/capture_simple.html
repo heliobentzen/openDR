@@ -5,6 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Capture – OWL openDR</title>
   <link href="{{ url_for('static', filename='css/tailwind.css') }}" rel="stylesheet">
+  <style>
+    /* Grad-CAM compare slider: dynamic clip-path driven by --pos, set from
+       JS on the range input's "input" event. Kept as plain CSS (not a
+       Tailwind utility) since Tailwind here is pre-compiled ahead of time
+       and cannot express a calc() against a runtime custom property. */
+    #glaucoma-compare {
+      --pos: 0%;
+    }
+    #glaucoma-compare-layer {
+      clip-path: inset(0 calc(100% - var(--pos)) 0 0);
+    }
+    #glaucoma-compare-handle {
+      left: var(--pos);
+    }
+  </style>
 </head>
 
 <body class="h-screen bg-slate-950 text-white flex overflow-hidden">
@@ -35,6 +50,7 @@
         value="{{ o }}"
         {% if o == "Click" %}id="capture-button"{% endif %}
         {% if o == "Explain" %}id="explain-button"{% endif %}
+        {% if o == "Glaucoma" %}id="glaucoma-button"{% endif %}
         {% if o == "Click" %}disabled aria-disabled="true"
         {% elif o in camera_dependent_names and not camera_available %}disabled aria-disabled="true"{% endif %}
         class="group w-full flex flex-col items-center gap-1.5 py-2.5 px-1 rounded-xl border font-semibold text-[11px] text-center cursor-pointer select-none transition-all duration-150 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900
@@ -237,11 +253,61 @@
           class="text-teal-400 hover:text-teal-300 text-xs underline transition"
         >&#x2B07; Download audit JSON</a>
       </div>
+
+      <div
+        id="glaucoma-report-panel"
+        class="hidden bg-slate-900 border-t border-violet-700 p-4 shrink-0"
+      >
+        <p class="text-violet-400 font-semibold text-sm mb-2">Triagem de Glaucoma</p>
+        <p id="glaucoma-verdict" class="font-bold text-base mb-2"></p>
+        <p id="glaucoma-summary" class="text-slate-400 text-xs mb-3">
+          Probabilidade:
+          <span id="glaucoma-probability" class="text-white font-medium">N/A</span>
+          &nbsp;&middot;&nbsp;
+          Limiar:
+          <span id="glaucoma-threshold" class="text-white font-medium">N/A</span>
+        </p>
+
+        <div id="glaucoma-compare" class="relative overflow-hidden rounded border border-violet-700 mb-2">
+          <img id="glaucoma-compare-base" alt="Imagem original processada" class="block w-full">
+          <div id="glaucoma-compare-layer" class="absolute inset-0 bg-cover bg-center"></div>
+          <input
+            id="glaucoma-compare-slider"
+            type="range"
+            min="0"
+            max="100"
+            value="0"
+            class="absolute inset-0 h-full w-full cursor-ew-resize opacity-0"
+            aria-label="Comparar imagem original com mapa de calor Grad-CAM"
+          >
+          <div id="glaucoma-compare-handle" class="pointer-events-none absolute inset-y-0 w-0.5 bg-violet-300"></div>
+        </div>
+        <p class="text-[10px] text-slate-500 mb-3">
+          Arraste para comparar a imagem original com o mapa de atenção (Grad-CAM)
+        </p>
+
+        <table class="w-full text-xs mb-3">
+          <thead>
+            <tr class="text-slate-500 text-left">
+              <th class="pb-1 font-medium">Sinal morfológico</th>
+              <th class="pb-1 font-medium text-right">Status</th>
+            </tr>
+          </thead>
+          <tbody id="glaucoma-features-body"></tbody>
+        </table>
+
+        <a
+          id="glaucoma-report-download"
+          class="text-violet-400 hover:text-violet-300 text-xs underline transition"
+          aria-disabled="true"
+        >&#x2B07; Download audit JSON</a>
+      </div>
     </section>
 
     <aside
       id="workflow-panel"
       data-inference-job-id="{{ inference_job_id or '' }}"
+      data-glaucoma-job-id="{{ glaucoma_job_id or '' }}"
       data-patient-id="{{ patient_id or '' }}"
       data-camera-available="{{ 'true' if camera_available else 'false' }}"
       data-poll-interval-ms="1000"
@@ -295,6 +361,19 @@
         {% endfor %}
       </div>
 
+      <section id="glaucoma-progress-panel" class="rounded-xl border border-violet-800 bg-violet-950/20 p-3">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-xs font-semibold text-violet-300">Triagem de Glaucoma</p>
+          <span
+            id="glaucoma-progress-icon"
+            class="flex h-6 w-6 items-center justify-center rounded-full border border-slate-600 text-xs font-bold text-slate-400"
+          >○</span>
+        </div>
+        <p id="glaucoma-progress-message" class="mt-1 text-xs text-slate-400">
+          Clique em Glaucoma para iniciar a triagem.
+        </p>
+      </section>
+
       <section id="gallery-panel" class="rounded-xl border border-slate-700 bg-slate-950/40 p-3 space-y-3">
         <div>
           <p class="text-slate-500 text-[10px] uppercase tracking-widest">Navegação</p>
@@ -341,6 +420,62 @@
   </main>
 
 </body>
+<script>
+  // Shared by the DR and Glaucoma polling loops below (each in its own
+  // <script> block/IIFE) — a plain top-level declaration so it's visible
+  // to later inline <script> tags without needing a shared module.
+  function createJobPoller({ getJobId, endpointPrefix, intervalMs, onUpdate, onDone, onFail }) {
+    let timer = null;
+
+    const stop = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+
+    const poll = async () => {
+      const jobId = getJobId();
+      if (!jobId) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${endpointPrefix}${jobId}?t=${Date.now()}`, {
+          cache: 'no-store',
+        });
+        if (!response.ok) {
+          throw new Error(`Status indisponível (${response.status} ${response.statusText})`);
+        }
+        const payload = await response.json();
+        onUpdate(payload);
+
+        if (payload.status === 'failed') {
+          onFail(payload.error || 'A operação falhou.');
+          stop();
+        } else if (payload.status === 'completed') {
+          onDone(payload);
+          stop();
+        }
+      } catch (error) {
+        console.warn('Falha ao consultar o progresso do job:', error);
+        onFail('Falha ao acompanhar o progresso.');
+        stop();
+      }
+    };
+
+    const start = () => {
+      if (!getJobId()) {
+        return;
+      }
+      stop();
+      poll();
+      timer = setInterval(poll, intervalMs);
+    };
+
+    return { start, stop };
+  }
+</script>
 <script>
   (() => {
     const elements = {
@@ -493,7 +628,6 @@
     let inferenceJobId = workflowPanel.dataset.inferenceJobId || '';
     const patientId = workflowPanel.dataset.patientId || '';
     const galleryPageSize = parseInt(workflowPanel.dataset.galleryPageSize || '12', 10);
-    let inferencePollTimer = null;
     let previewMode = 'adjusted';
     let previewRenderFrame = null;
     let galleryPage = 1;
@@ -843,72 +977,39 @@
       });
     };
 
-    const stopInferencePolling = () => {
-      if (inferencePollTimer) {
-        clearInterval(inferencePollTimer);
-        inferencePollTimer = null;
-      }
-    };
-
-    const renderInferenceStatus = (payload) => {
-      payload.steps.forEach(renderStep);
-      renderReport(payload.result);
-
-      if (payload.grade_message) {
-        gradeDisplay.textContent = payload.grade_message;
-        gradeDisplay.setAttribute('aria-label', `Grade: ${payload.grade_message}`);
-      }
-
-      if (payload.status === 'failed') {
-        setWorkflowMessage(payload.error || 'A inferência falhou.', true);
-        setExplainState(false);
-        stopInferencePolling();
-        return;
-      }
-
-      if (payload.status === 'completed') {
+    const drPoller = createJobPoller({
+      getJobId: () => inferenceJobId,
+      endpointPrefix: '/inference-status/',
+      intervalMs: INFERENCE_POLL_INTERVAL_MS,
+      onUpdate: (payload) => {
+        payload.steps.forEach(renderStep);
+        renderReport(payload.result);
+        if (payload.grade_message) {
+          gradeDisplay.textContent = payload.grade_message;
+          gradeDisplay.setAttribute('aria-label', `Grade: ${payload.grade_message}`);
+        }
+        if (payload.status === 'running') {
+          setWorkflowMessage(payload.message || 'Acompanhando o progresso da inferência.');
+          setExplainState(true);
+        }
+      },
+      onDone: () => {
         setWorkflowMessage('Fluxo concluído. O relatório está pronto.');
         setExplainState(false);
-        stopInferencePolling();
-        return;
-      }
-
-      setWorkflowMessage(payload.message || 'Acompanhando o progresso da inferência.');
-      setExplainState(true);
-    };
-
-    const pollInferenceStatus = async () => {
-      if (!inferenceJobId) {
-        return;
-      }
-
-      try {
-        const response = await fetch(`/inference-status/${inferenceJobId}?t=${Date.now()}`, {
-          cache: 'no-store',
-        });
-        if (!response.ok) {
-          throw new Error(`Status da inferência indisponível (${response.status} ${response.statusText})`);
-        }
-        const payload = await response.json();
-        renderInferenceStatus(payload);
-      } catch (error) {
-        console.warn('Falha ao consultar o progresso da inferência:', error);
-        setWorkflowMessage('Falha ao acompanhar o progresso da inferência.', true);
+      },
+      onFail: (message) => {
+        setWorkflowMessage(message, true);
         setExplainState(false);
-        stopInferencePolling();
-      }
-    };
+      },
+    });
 
     const startInferencePolling = () => {
       if (!inferenceJobId) {
         return;
       }
-
-      stopInferencePolling();
       setWorkflowMessage('Acompanhando a inferência em tempo real...');
       setExplainState(true);
-      pollInferenceStatus();
-      inferencePollTimer = setInterval(pollInferenceStatus, INFERENCE_POLL_INTERVAL_MS);
+      drPoller.start();
     };
 
     const detectEyeInFocus = () => {
@@ -1166,6 +1267,165 @@
       submitButton.disabled = true;
       submitLabel.textContent = 'Enviando...';
     });
+  })();
+</script>
+<script>
+  (() => {
+    const workflowPanel = document.getElementById('workflow-panel');
+    const button = document.getElementById('glaucoma-button');
+    const progressIcon = document.getElementById('glaucoma-progress-icon');
+    const progressMessage = document.getElementById('glaucoma-progress-message');
+    const panel = document.getElementById('glaucoma-report-panel');
+    const verdict = document.getElementById('glaucoma-verdict');
+    const probabilityEl = document.getElementById('glaucoma-probability');
+    const thresholdEl = document.getElementById('glaucoma-threshold');
+    const featuresBody = document.getElementById('glaucoma-features-body');
+    const downloadLink = document.getElementById('glaucoma-report-download');
+    const compareEl = document.getElementById('glaucoma-compare');
+    const compareBase = document.getElementById('glaucoma-compare-base');
+    const compareLayer = document.getElementById('glaucoma-compare-layer');
+    const compareSlider = document.getElementById('glaucoma-compare-slider');
+
+    if (!workflowPanel || !progressIcon || !progressMessage || !panel || !verdict
+      || !probabilityEl || !thresholdEl || !featuresBody || !downloadLink
+      || !compareEl || !compareBase || !compareLayer || !compareSlider) {
+      return;
+    }
+
+    const jobId = workflowPanel.dataset.glaucomaJobId || '';
+    const pollIntervalMs = parseInt(workflowPanel.dataset.pollIntervalMs || '1000', 10);
+
+    const PROGRESS_STYLES = {
+      completed: {
+        icon: '✓',
+        className: 'flex h-6 w-6 items-center justify-center rounded-full border border-emerald-400 bg-emerald-500/15 text-xs font-bold text-emerald-300',
+      },
+      running: {
+        icon: '…',
+        className: 'flex h-6 w-6 items-center justify-center rounded-full border border-amber-300 bg-amber-400/10 text-xs font-bold text-amber-300',
+      },
+      failed: {
+        icon: '!',
+        className: 'flex h-6 w-6 items-center justify-center rounded-full border border-rose-400 bg-rose-500/10 text-xs font-bold text-rose-300',
+      },
+      pending: {
+        icon: '○',
+        className: 'flex h-6 w-6 items-center justify-center rounded-full border border-slate-600 text-xs font-bold text-slate-400',
+      },
+    };
+
+    const setButtonBusy = (isBusy) => {
+      if (!button) {
+        return;
+      }
+      button.disabled = isBusy;
+      button.setAttribute('aria-disabled', isBusy.toString());
+    };
+
+    const setProgress = (status, message) => {
+      const style = PROGRESS_STYLES[status] || PROGRESS_STYLES.pending;
+      progressIcon.className = style.className;
+      progressIcon.textContent = style.icon;
+      progressMessage.textContent = message;
+    };
+
+    compareSlider.addEventListener('input', () => {
+      compareEl.style.setProperty('--pos', `${compareSlider.value}%`);
+    });
+
+    const renderFeatures = (features) => {
+      featuresBody.innerHTML = '';
+      if (!features) {
+        return;
+      }
+      Object.entries(features).forEach(([label, present]) => {
+        const row = document.createElement('tr');
+        row.className = present ? 'text-rose-300' : 'text-slate-400';
+
+        const labelCell = document.createElement('td');
+        labelCell.className = 'py-1';
+        labelCell.textContent = label;
+
+        const statusCell = document.createElement('td');
+        statusCell.className = 'py-1 text-right font-medium';
+        statusCell.textContent = present ? 'Presente' : 'Ausente';
+
+        row.appendChild(labelCell);
+        row.appendChild(statusCell);
+        featuresBody.appendChild(row);
+      });
+    };
+
+    const renderResult = (result) => {
+      if (!result || !result.overlay_image_url) {
+        panel.classList.add('hidden');
+        return;
+      }
+
+      panel.classList.remove('hidden');
+      compareBase.src = result.source_image_url || result.overlay_image_url;
+      compareLayer.style.backgroundImage = `url('${result.overlay_image_url}')`;
+      compareSlider.value = 0;
+      compareEl.style.setProperty('--pos', '0%');
+
+      const probability = typeof result.probability === 'number' ? result.probability : null;
+      probabilityEl.textContent = probability !== null
+        ? `${(probability * 100).toFixed(1)}%`
+        : 'N/A';
+      thresholdEl.textContent = typeof result.threshold === 'number'
+        ? `${(result.threshold * 100).toFixed(1)}%`
+        : 'N/A';
+
+      if (result.positive) {
+        verdict.textContent = 'Suspeita positiva para glaucoma referível';
+        verdict.className = 'font-bold text-base mb-2 text-rose-400';
+      } else {
+        verdict.textContent = 'Baixa suspeita de glaucoma referível';
+        verdict.className = 'font-bold text-base mb-2 text-emerald-400';
+      }
+
+      renderFeatures(result.features);
+
+      if (result.json_url) {
+        downloadLink.href = result.json_url;
+        downloadLink.removeAttribute('aria-disabled');
+      } else {
+        downloadLink.removeAttribute('href');
+        downloadLink.setAttribute('aria-disabled', 'true');
+      }
+    };
+
+    const glaucomaPoller = createJobPoller({
+      getJobId: () => jobId,
+      endpointPrefix: '/inference-status/',
+      intervalMs: pollIntervalMs,
+      onUpdate: (payload) => {
+        renderResult(payload.result);
+        if (payload.status === 'running') {
+          setProgress('running', payload.message || 'Processando...');
+          setButtonBusy(true);
+        }
+      },
+      onDone: () => {
+        setProgress('completed', 'Triagem concluída.');
+        setButtonBusy(false);
+      },
+      onFail: (message) => {
+        setProgress('failed', message);
+        setButtonBusy(false);
+      },
+    });
+
+    const startPolling = () => {
+      if (!jobId) {
+        return;
+      }
+      setProgress('running', 'Acompanhando a triagem em tempo real...');
+      setButtonBusy(true);
+      glaucomaPoller.start();
+    };
+
+    startPolling();
   })();
 </script>
 </html>

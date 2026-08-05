@@ -56,6 +56,8 @@ cd /home/pi/openDR
 python3 fundus.py
 ```
 
+Served by [waitress](https://docs.pylonsproject.org/projects/waitress/) (a production WSGI server) rather than Flask's development server. Falls back to the Flask dev server with a warning if `waitress` isn't installed.
+
 ## Notes on camera migration
 - Legacy `picamera` usage has been replaced with `Picamera2` (libcamera backend).
 - Vertical camera flipping is now handled in software before JPEG encoding.

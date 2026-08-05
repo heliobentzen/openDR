@@ -71,13 +71,19 @@ are run on separate hardware.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import pickle
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
+
+from .heatmap import overlay_heatmap
+
+logger = logging.getLogger(__name__)
 
 try:
     import torch
@@ -224,10 +230,21 @@ def _load_model(
     model = _build_model(num_classes=num_classes)
 
     if resolved and Path(resolved).is_file():
-        state = torch.load(resolved, map_location=device)
-        if isinstance(state, dict) and "model_state_dict" in state:
-            state = state["model_state_dict"]
-        model.load_state_dict(state)
+        try:
+            state = torch.load(resolved, map_location=device)
+            if isinstance(state, dict) and "model_state_dict" in state:
+                state = state["model_state_dict"]
+            model.load_state_dict(state)
+        except (RuntimeError, OSError, EOFError, pickle.UnpicklingError, ValueError, KeyError) as exc:
+            # Mirrors modules.glaucoma._load_model: a corrupt/truncated
+            # checkpoint (e.g. an interrupted download) falls back to demo
+            # mode instead of taking down the whole Grad-CAM explanation step.
+            logger.warning(
+                "Could not load Grad-CAM checkpoint %s (%s); running in demo "
+                "mode with random weights.",
+                resolved,
+                exc,
+            )
 
     model.to(device)
     model.eval()
@@ -489,41 +506,6 @@ def _compute_guided_gradcam(
 
 
 # ---------------------------------------------------------------------------
-# Heatmap overlay
-# ---------------------------------------------------------------------------
-
-
-def _overlay_heatmap(
-    image: np.ndarray,
-    cam: np.ndarray,
-    alpha: float = _OVERLAY_ALPHA,
-) -> np.ndarray:
-    """Blend the Grad-CAM heatmap over the original BGR image.
-
-    Parameters
-    ----------
-    image:
-        Original BGR fundus image (``uint8``).
-    cam:
-        Grad-CAM activation map with values in ``[0, 1]`` at any spatial
-        resolution – it is resized to match *image*.
-    alpha:
-        Opacity of the heatmap layer (0 = transparent, 1 = fully opaque).
-
-    Returns
-    -------
-    np.ndarray
-        BGR ``uint8`` composite image.
-    """
-    h, w = image.shape[:2]
-    cam_resized = cv2.resize(cam, (w, h))
-    heatmap = cv2.applyColorMap(
-        (cam_resized * 255).astype(np.uint8), cv2.COLORMAP_JET
-    )
-    return cv2.addWeighted(image, 1.0 - alpha, heatmap, alpha, 0)
-
-
-# ---------------------------------------------------------------------------
 # Lesion region extraction
 # ---------------------------------------------------------------------------
 
@@ -761,8 +743,8 @@ def run_gradcam(
     # Step 3 – Guided Grad-CAM (pixel-precise, class-discriminative).
     guided_gradcam = _compute_guided_gradcam(cam, guided_grads)
 
-    overlay = _overlay_heatmap(image, cam, alpha=overlay_alpha)
-    guided_overlay = _overlay_heatmap(image, guided_gradcam, alpha=overlay_alpha)
+    overlay = overlay_heatmap(image, cam, alpha=overlay_alpha)
+    guided_overlay = overlay_heatmap(image, guided_gradcam, alpha=overlay_alpha)
     lesions = _extract_lesion_regions(cam, image.shape[:2])
 
     cv2.imwrite(overlay_path, overlay)

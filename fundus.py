@@ -30,6 +30,7 @@ from RetinaCamera import (
     RetinaCamera,
     RetinaCameraError,
 )
+from modules.glaucoma import run_glaucoma_screening
 from modules.process import (
     DEFAULT_PROCESSING_SETTINGS,
     grade,
@@ -45,11 +46,14 @@ except ImportError:  # pragma: no cover - depends on Raspberry Pi runtime
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 BASE_FOLDER = Path(os.environ.get("OPEN_DR_BASE", "/home/pi/openDR")).resolve()
-TOKENS = ["Flip", "Vid", "Click", "Switch", "Grade", "Explain", "Shut"]
+TOKENS = ["Flip", "Vid", "Click", "Switch", "Grade", "Explain", "Glaucoma", "Shut"]
 PATIENT_ID_RE = re.compile(r"^[A-Z0-9_-]{1,64}$")
 FOCUS_WARNING_MESSAGE = "Posicione o paciente e foque antes de capturar"
 CAMERA_UNAVAILABLE_MESSAGE = (
     "Câmera indisponível - você ainda pode enviar fotos para análise"
+)
+HEAVY_JOB_BUSY_MESSAGE = (
+    "AGUARDE O RELATÓRIO ATUAL TERMINAR ANTES DE INICIAR OUTRO"
 )
 MIN_FOCUS_SCORE = 140
 DARK_PIXEL_THRESHOLD = 58
@@ -58,10 +62,24 @@ MIN_DARK_DENSITY = 0.20
 MIN_DARK_RATIO = 0.01
 MAX_DARK_RATIO = 0.42
 PREVIEW_MIN_INTERVAL_S = 0.20
-INFERENCE_WORKER_COUNT = max(1, int(os.environ.get("OPEN_DR_INFERENCE_WORKERS", "2")))
-MAX_INFERENCE_JOB_HISTORY = max(
-    1, int(os.environ.get("OPEN_DR_MAX_INFERENCE_JOB_HISTORY", "8"))
-)
+
+
+def _positive_int_env(name, default):
+    """Parse an env var as a positive int, falling back to *default* on any
+    invalid value instead of raising — a bad/typo'd value here must not take
+    down the whole app at import time."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        print(f"WARNING: invalid value {raw!r} for {name}; using default {default}.")
+        return default
+
+
+INFERENCE_WORKER_COUNT = _positive_int_env("OPEN_DR_INFERENCE_WORKERS", 2)
+MAX_INFERENCE_JOB_HISTORY = _positive_int_env("OPEN_DR_MAX_INFERENCE_JOB_HISTORY", 8)
 INFERENCE_STEPS = (
     ("received", "Imagem recebida"),
     ("preprocessing", "Pré-processamento (limpeza de ruído)"),
@@ -95,16 +113,26 @@ class CameraSessionState:
         self.camera = None
         self.camera_error = None
         self.last_img = None
-        self.inference_job_id = None
+        # One background-job id per job "kind" (see create_inference_job).
+        self.job_ids = {"dr_explain": None, "glaucoma": None}
         self.patient_id = ""
         self.processing_settings = default_processing_settings()
 
     def reset(self):
-        self.inference_job_id = None
+        self.clear_job_ids()
         self.patient_id = ""
         self.last_img = None
         self.camera_error = None
         self.processing_settings = default_processing_settings()
+
+    def clear_job_ids(self):
+        """Invalidate any in-flight/completed report jobs for the active image.
+
+        Called whenever the active image changes (new capture, upload, new
+        session) since a DR/glaucoma report computed on the previous image
+        no longer applies to the current one.
+        """
+        self.job_ids = {"dr_explain": None, "glaucoma": None}
 
     def stop_camera(self):
         if self.camera is not None:
@@ -131,6 +159,12 @@ inference_executor = ThreadPoolExecutor(
     max_workers=INFERENCE_WORKER_COUNT,
     thread_name_prefix="inference",
 )
+# Guards against two heavy CNN jobs (DR-explain, glaucoma screening) running
+# at once on the same Raspberry Pi CPU. Acquired synchronously in the request
+# handler before a job is created/submitted; released by the background job
+# itself once it finishes (acquire/release across threads is valid for a
+# plain threading.Lock).
+heavy_inference_lock = Lock()
 
 
 def get_processing_settings():
@@ -187,6 +221,40 @@ def start_camera_safely():
         return None, describe_camera_error(exc)
 
 
+def start_heavy_job(kind, submit_job):
+    """Guard, create, and submit a heavy background job of *kind*.
+
+    Shared by the "Explain" (dr_explain) and "Glaucoma" branches of
+    :func:`captureSimpleFunc`, which differ only in which target function
+    they submit to :data:`inference_executor` and what extra arguments it
+    needs — *submit_job(job_id, last_img)* captures that per-kind detail.
+
+    Returns a ``(job_id, error_message)`` pair where exactly one is truthy.
+    On error, *job_id* is the last known job id for this kind (possibly
+    ``None``) so the caller can keep rendering/polling an already-running
+    job instead of losing track of it.
+    """
+    with state.lock:
+        last_img = state.last_img
+        active_job_id = state.job_ids[kind]
+
+    if last_img is None:
+        return None, "NO IMAGE SPECIFIED"
+
+    if active_job_id and is_inference_job_running(active_job_id):
+        return active_job_id, "INFERENCE IN PROGRESS"
+
+    if not heavy_inference_lock.acquire(blocking=False):
+        return active_job_id, HEAVY_JOB_BUSY_MESSAGE
+
+    job_id = create_inference_job(last_img, kind=kind)
+    with state.lock:
+        state.job_ids[kind] = job_id
+
+    submit_job(job_id, last_img)
+    return job_id, None
+
+
 @app.route("/")
 def my_form():
     normalON()
@@ -195,7 +263,7 @@ def my_form():
 
 @app.route("/", methods=["POST"])
 def my_form_post():
-    patient_id = sanitize_patient_id(request.form["text"].upper())
+    patient_id = sanitize_patient_id(request.form.get("text", "").upper())
     if not patient_id:
         return render_template("index.html")
 
@@ -204,7 +272,7 @@ def my_form_post():
     with state.lock:
         state.stop_camera()
         state.patient_id = patient_id
-        state.inference_job_id = None
+        state.clear_job_ids()
         state.last_img = None
         state.camera = camera
         state.camera_error = camera_error
@@ -238,7 +306,7 @@ def captureSimpleFunc():
             if not is_eye_in_focus(image):
                 return render_capture(FOCUS_WARNING_MESSAGE)
             state.last_img = save_captured_images(state.patient_id, image)
-            state.inference_job_id = None
+            state.clear_job_ids()
         return render_capture()
 
     if d == "Flip":
@@ -263,7 +331,7 @@ def captureSimpleFunc():
                 state.deactivate_camera(error_message)
                 return render_capture(error_message)
             state.last_img = save_captured_images(state.patient_id, state.camera.images)
-            state.inference_job_id = None
+            state.clear_job_ids()
         return render_capture()
 
     if d == "Grade":
@@ -277,26 +345,26 @@ def captureSimpleFunc():
         return render_capture(grade_result)
 
     if d == "Explain":
-        with state.lock:
-            last_img = state.last_img
-            active_job_id = state.inference_job_id
-        if last_img is None:
-            return render_capture("NO IMAGE SPECIFIED")
-
-        if active_job_id and is_inference_job_running(active_job_id):
-            return render_capture("INFERENCE IN PROGRESS", inference_job_id=active_job_id)
-
-        job_id = create_inference_job(last_img)
-        with state.lock:
-            state.inference_job_id = job_id
-
-        inference_executor.submit(
-            run_explanation_job,
-            job_id,
-            last_img,
-            dict(processing_settings),
+        job_id, error = start_heavy_job(
+            "dr_explain",
+            lambda job_id, last_img: inference_executor.submit(
+                run_explanation_job, job_id, last_img, dict(processing_settings)
+            ),
         )
+        if error:
+            return render_capture(error, inference_job_id=job_id)
         return render_capture("PROCESSANDO...", inference_job_id=job_id)
+
+    if d == "Glaucoma":
+        job_id, error = start_heavy_job(
+            "glaucoma",
+            lambda job_id, last_img: inference_executor.submit(
+                run_glaucoma_job, job_id, last_img
+            ),
+        )
+        if error:
+            return render_capture(error, glaucoma_job_id=job_id)
+        return render_capture("PROCESSANDO GLAUCOMA...", glaucoma_job_id=job_id)
 
     if d == "Switch":
         with state.lock:
@@ -383,7 +451,7 @@ def upload_image():
         if not state.patient_id:
             return render_capture("NENHUMA SESSÃO ATIVA - INICIE UMA SESSÃO")
         state.last_img = save_captured_images(state.patient_id, image)
-        state.inference_job_id = None
+        state.clear_job_ids()
     return render_capture("IMAGEM ENVIADA")
 
 
@@ -431,6 +499,7 @@ def render_capture(
     confidence=None,
     lesion_count=None,
     inference_job_id=None,
+    glaucoma_job_id=None,
 ):
     with state.lock:
         patient_id = state.patient_id
@@ -447,6 +516,7 @@ def render_capture(
         confidence=confidence,
         lesion_count=lesion_count,
         inference_job_id=inference_job_id,
+        glaucoma_job_id=glaucoma_job_id,
         patient_id=patient_id,
         camera_available=camera_available,
         camera_warning=camera_warning,
@@ -464,7 +534,14 @@ def format_grade_display(grade_value):
     return str(grade_value)[:4]
 
 
-def create_inference_job(image_path):
+def create_inference_job(image_path, kind):
+    """Create a new background job entry.
+
+    *kind* ("dr_explain" | "glaucoma") is opaque to the tracker itself — it
+    is only used by :func:`serialize_inference_job` to pick the right
+    result-shaping helper, and by each job's own status callback to decide
+    what to write into ``result_patch``.
+    """
     raw_filename = Path(image_path).name
     job_id = str(uuid4())
     steps = {
@@ -483,6 +560,7 @@ def create_inference_job(image_path):
     with inference_jobs_lock:
         inference_jobs[job_id] = {
             "job_id": job_id,
+            "kind": kind,
             "created_at": time.time(),
             "status": "running",
             "current_step": "preprocessing",
@@ -525,7 +603,24 @@ def get_inference_job(job_id):
         return deepcopy(job) if job is not None else None
 
 
-def advance_inference_job(job_id, completed_step, next_step=None, **payload):
+def advance_inference_job(
+    job_id,
+    completed_step,
+    next_step=None,
+    *,
+    message=None,
+    grade_message=None,
+    step_detail=None,
+    step_image_filename=None,
+    result_patch=None,
+):
+    """Mark *completed_step* done and move the job to *next_step* (or finish it).
+
+    Generic across job kinds: the caller (a job's own ``status_callback``,
+    e.g. in :func:`run_explanation_job` / :func:`run_glaucoma_job`) decides
+    what belongs in ``result_patch``/``message``/``grade_message`` — this
+    function has no built-in knowledge of any specific job's result shape.
+    """
     with inference_jobs_lock:
         job = inference_jobs.get(job_id)
         if job is None:
@@ -533,33 +628,17 @@ def advance_inference_job(job_id, completed_step, next_step=None, **payload):
 
         completed_state = job["steps"][completed_step]
         completed_state["status"] = "completed"
+        if step_image_filename:
+            completed_state["image_filename"] = step_image_filename
+        if step_detail is not None:
+            completed_state["detail"] = step_detail
 
-        processed_path = payload.get("processed_path")
-        if completed_step == "preprocessing" and processed_path:
-            completed_state["image_filename"] = Path(processed_path).name
-            completed_state["detail"] = "Ruído removido e imagem preparada."
-            job["message"] = "Pré-processamento concluído."
-        elif completed_step == "inference":
-            job["grade_message"] = format_grade_display(payload.get("theia_grade"))
-            completed_state["detail"] = (
-                f"Resultado do modelo: {job['grade_message'] or 'N/A'}"
-            )
-            job["message"] = "Inferência do modelo concluída."
-        elif completed_step == "report":
-            gradcam_record = payload["gradcam"]
-            overlay_filename = Path(gradcam_record["gradcam_overlay"]).name
-            json_filename = Path(gradcam_record["gradcam_audit_json"]).name
-            job["grade_message"] = format_grade_display(payload.get("theia_grade"))
-            completed_state["image_filename"] = overlay_filename
-            completed_state["detail"] = "Relatório final disponível."
-            job["result"] = {
-                "overlay_filename": overlay_filename,
-                "json_filename": json_filename,
-                "dr_label": gradcam_record["predicted_dr_grade"]["label"],
-                "confidence": gradcam_record["predicted_dr_grade"]["confidence"],
-                "lesion_count": len(gradcam_record["lesion_regions"]),
-            }
-            job["message"] = "Relatório final gerado."
+        if message is not None:
+            job["message"] = message
+        if grade_message is not None:
+            job["grade_message"] = grade_message
+        if result_patch:
+            job["result"].update(result_patch)
 
         if next_step is not None:
             job["current_step"] = next_step
@@ -584,8 +663,60 @@ def fail_inference_job(job_id, error_message):
         job["current_step"] = None
 
 
+def _serialize_dr_result(result):
+    overlay_filename = result.get("overlay_filename")
+    json_filename = result.get("json_filename")
+    return {
+        "overlay_image_url": (
+            url_for("serve_image", filename=overlay_filename)
+            if overlay_filename
+            else None
+        ),
+        "json_url": (
+            url_for("serve_image", filename=json_filename)
+            if json_filename
+            else None
+        ),
+        "dr_label": result.get("dr_label"),
+        "confidence": result.get("confidence"),
+        "lesion_count": result.get("lesion_count"),
+    }
+
+
+def _serialize_glaucoma_result(result):
+    base_filename = result.get("base_filename")
+    overlay_filename = result.get("overlay_filename")
+    json_filename = result.get("json_filename")
+    return {
+        "source_image_url": (
+            url_for("serve_image", filename=base_filename)
+            if base_filename
+            else None
+        ),
+        "overlay_image_url": (
+            url_for("serve_image", filename=overlay_filename)
+            if overlay_filename
+            else None
+        ),
+        "json_url": (
+            url_for("serve_image", filename=json_filename)
+            if json_filename
+            else None
+        ),
+        "probability": result.get("probability"),
+        "threshold": result.get("threshold"),
+        "positive": result.get("positive"),
+        "features": result.get("features"),
+    }
+
+
+_RESULT_SERIALIZERS = {
+    "dr_explain": _serialize_dr_result,
+    "glaucoma": _serialize_glaucoma_result,
+}
+
+
 def serialize_inference_job(job):
-    result = job["result"]
     serialized_steps = []
     for step_key, step_label in INFERENCE_STEPS:
         step = job["steps"][step_key]
@@ -604,61 +735,152 @@ def serialize_inference_job(job):
             }
         )
 
-    overlay_filename = result.get("overlay_filename")
-    json_filename = result.get("json_filename")
+    serialize_result = _RESULT_SERIALIZERS[job["kind"]]
     return {
         "job_id": job["job_id"],
+        "kind": job["kind"],
         "status": job["status"],
         "current_step": job["current_step"],
         "message": job["message"],
         "error": job["error"],
         "grade_message": job["grade_message"],
         "steps": serialized_steps,
-        "result": {
-            "overlay_image_url": (
-                url_for("serve_image", filename=overlay_filename)
-                if overlay_filename
-                else None
-            ),
-            "json_url": (
-                url_for("serve_image", filename=json_filename)
-                if json_filename
-                else None
-            ),
-            "dr_label": result.get("dr_label"),
-            "confidence": result.get("confidence"),
-            "lesion_count": result.get("lesion_count"),
-        },
+        "result": serialize_result(job["result"]),
     }
+
+
+def _run_heavy_job(job_id, work_fn, runtime_error_label):
+    """Run *work_fn* (a zero-arg callable doing the actual heavy inference).
+
+    Shared by :func:`run_explanation_job` and :func:`run_glaucoma_job`: both
+    submit CPU-heavy CNN work to a background thread and need the same
+    failure-mode translation into a failed job state, plus a guaranteed
+    :data:`heavy_inference_lock` release — the only thing that differs
+    between the two is the label used for the "model itself blew up"
+    (``RuntimeError``) case.
+    """
+    try:
+        work_fn()
+    except RuntimeError as exc:
+        app.logger.exception("Job %s failed during processing.", job_id)
+        fail_inference_job(job_id, f"{runtime_error_label}: {exc}")
+    except OSError as exc:  # pragma: no cover - runtime safeguards
+        app.logger.exception("Job %s failed with OSError.", job_id)
+        fail_inference_job(job_id, f"FILE ERROR: {exc}")
+    except ValueError as exc:  # pragma: no cover - runtime safeguards
+        app.logger.exception("Job %s failed with ValueError.", job_id)
+        fail_inference_job(job_id, f"DATA ERROR: {exc}")
+    except KeyError as exc:  # pragma: no cover - runtime safeguards
+        app.logger.exception("Job %s failed with KeyError.", job_id)
+        fail_inference_job(job_id, f"REPORT ERROR: missing field {exc}")
+    finally:
+        heavy_inference_lock.release()
 
 
 def run_explanation_job(job_id, image_path, processing_settings):
     def status_callback(step_name, **payload):
         if step_name == "preprocessing":
-            advance_inference_job(job_id, "preprocessing", next_step="inference", **payload)
+            processed_path = payload.get("processed_path")
+            advance_inference_job(
+                job_id,
+                "preprocessing",
+                next_step="inference",
+                message="Pré-processamento concluído.",
+                step_image_filename=Path(processed_path).name if processed_path else None,
+                step_detail="Ruído removido e imagem preparada." if processed_path else None,
+            )
         elif step_name == "inference":
-            advance_inference_job(job_id, "inference", next_step="report", **payload)
+            grade_message = format_grade_display(payload.get("theia_grade"))
+            advance_inference_job(
+                job_id,
+                "inference",
+                next_step="report",
+                message="Inferência do modelo concluída.",
+                grade_message=grade_message,
+                step_detail=f"Resultado do modelo: {grade_message or 'N/A'}",
+            )
         elif step_name == "report":
-            advance_inference_job(job_id, "report", **payload)
+            gradcam_record = payload["gradcam"]
+            overlay_filename = Path(gradcam_record["gradcam_overlay"]).name
+            json_filename = Path(gradcam_record["gradcam_audit_json"]).name
+            grade_message = format_grade_display(payload.get("theia_grade"))
+            advance_inference_job(
+                job_id,
+                "report",
+                message="Relatório final gerado.",
+                grade_message=grade_message,
+                step_image_filename=overlay_filename,
+                step_detail="Relatório final disponível.",
+                result_patch={
+                    "overlay_filename": overlay_filename,
+                    "json_filename": json_filename,
+                    "dr_label": gradcam_record["predicted_dr_grade"]["label"],
+                    "confidence": gradcam_record["predicted_dr_grade"]["confidence"],
+                    "lesion_count": len(gradcam_record["lesion_regions"]),
+                },
+            )
 
-    try:
-        grade_with_explanation(
+    _run_heavy_job(
+        job_id,
+        lambda: grade_with_explanation(
             image_path,
             status_callback=status_callback,
             processing_settings=processing_settings,
-        )
-    except RuntimeError as exc:
-        app.logger.exception("Inference job %s failed during processing.", job_id)
-        fail_inference_job(job_id, f"GRAD-CAM ERROR: {exc}")
-    except OSError as exc:  # pragma: no cover - runtime safeguards
-        app.logger.exception("Inference job %s failed with OSError.", job_id)
-        fail_inference_job(job_id, f"FILE ERROR: {exc}")
-    except ValueError as exc:  # pragma: no cover - runtime safeguards
-        app.logger.exception("Inference job %s failed with ValueError.", job_id)
-        fail_inference_job(job_id, f"DATA ERROR: {exc}")
-    except KeyError as exc:  # pragma: no cover - runtime safeguards
-        app.logger.exception("Inference job %s failed with KeyError.", job_id)
-        fail_inference_job(job_id, f"REPORT ERROR: missing field {exc}")
+        ),
+        runtime_error_label="GRAD-CAM ERROR",
+    )
+
+
+def run_glaucoma_job(job_id, image_path):
+    def status_callback(step_name, **payload):
+        if step_name == "preprocessing":
+            advance_inference_job(
+                job_id,
+                "preprocessing",
+                next_step="inference",
+                message="Pré-processamento concluído.",
+                step_detail="Imagem preparada para o modelo de glaucoma.",
+            )
+        elif step_name == "inference":
+            advance_inference_job(
+                job_id,
+                "inference",
+                next_step="report",
+                message="Inferência do modelo concluída.",
+                step_detail="Avaliação de glaucoma calculada.",
+            )
+        elif step_name == "report":
+            glaucoma_record = payload["glaucoma"]
+            base_filename = Path(glaucoma_record["glaucoma_base_image"]).name
+            overlay_filename = Path(glaucoma_record["glaucoma_gradcam_overlay"]).name
+            json_filename = Path(glaucoma_record["glaucoma_audit_json"]).name
+            referable = glaucoma_record["referable_glaucoma"]
+            advance_inference_job(
+                job_id,
+                "report",
+                message="Relatório de glaucoma gerado.",
+                step_image_filename=overlay_filename,
+                step_detail="Relatório final disponível.",
+                result_patch={
+                    "base_filename": base_filename,
+                    "overlay_filename": overlay_filename,
+                    "json_filename": json_filename,
+                    "probability": referable["probability"],
+                    "threshold": referable["threshold"],
+                    "positive": referable["positive"],
+                    "features": glaucoma_record["features"],
+                },
+            )
+
+    _run_heavy_job(
+        job_id,
+        lambda: run_glaucoma_screening(
+            cv2.imread(image_path),
+            image_path,
+            status_callback=status_callback,
+        ),
+        runtime_error_label="GLAUCOMA MODEL ERROR",
+    )
 
 
 @app.route("/images/<path:filename>")
@@ -873,10 +1095,30 @@ def read_capture_result(image_path):
 
 
 def list_patient_capture_metadata(patient_id):
+    """Return gallery metadata for every capture belonging to *patient_id*.
+
+    The expensive part of this (globbing the images directory and opening
+    each capture's ``_processed_gradcam.json`` report) is cached in
+    :func:`_cached_patient_capture_metadata`, keyed by the images
+    directory's mtime. Repeated gallery pagination ("Carregar mais") within
+    the same patient session hits the cache instead of re-reading every
+    report file on every page.
+    """
     patient_id = validated_patient_id(patient_id)
     directory = images_directory()
     if not directory.exists():
         return []
+
+    return _cached_patient_capture_metadata(patient_id, directory.stat().st_mtime_ns)
+
+
+@lru_cache(maxsize=32)
+def _cached_patient_capture_metadata(patient_id, directory_mtime_ns):
+    # directory_mtime_ns is part of the cache key purely for invalidation:
+    # every new capture or inference report is a newly created file, which
+    # bumps the containing directory's mtime and so produces a fresh key.
+    _ = directory_mtime_ns
+    directory = images_directory()
 
     metadata = []
     for image_path in directory.glob(f"{patient_id}_*.jpg"):
@@ -1025,6 +1267,32 @@ def shut_down():
     print(output.decode("utf-8", errors="replace"))
 
 
+def run_production_server(host="0.0.0.0", port=5000):
+    """Serve *app* with waitress instead of Flask's development server.
+
+    The camera, GPIO controller, and inference executor are process-wide
+    singletons (see ``state`` / ``pi`` / ``inference_executor`` above), so
+    this must stay a single OS process — waitress's threaded model (as
+    opposed to a pre-fork server like gunicorn's default worker) satisfies
+    that without any further changes to how state is shared.
+    """
+    try:
+        from waitress import serve
+    except ImportError:
+        app.logger.warning(
+            "waitress is not installed; falling back to Flask's development "
+            "server (not recommended outside local testing). "
+            "Install it with: pip install waitress"
+        )
+        app.run(host=host, port=port, threaded=True)
+        return
+
+    # threads mirrors INFERENCE_WORKER_COUNT + headroom for preview polling,
+    # gallery pagination, and inference-status polling running concurrently
+    # with a background CNN job.
+    serve(app, host=host, port=port, threads=INFERENCE_WORKER_COUNT + 4)
+
+
 if __name__ == "__main__":
     init_gpio()
-    app.run(host="0.0.0.0", threaded=True)
+    run_production_server()

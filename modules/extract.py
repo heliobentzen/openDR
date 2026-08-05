@@ -273,36 +273,3 @@ def extract_fundus_from_image(
     circle = extract_circles(image)
     threshed_image = erode_thresh(circle, threshold_value=threshold_value)
     return ellipse_fit(circle, threshed_image)
-
-
-def extract_fundus(filename: str, threshold_value: int = _THRESHOLD_VALUE) -> np.ndarray:
-    """Load an image file and return the extracted fundus region.
-
-    Convenience wrapper that chains :func:`extract_circles`,
-    :func:`erode_thresh`, and :func:`ellipse_fit` into a single call
-    suitable for use in the processing pipeline.
-
-    Parameters
-    ----------
-    filename:
-        Absolute or relative path to the source JPEG/PNG image captured
-        by the OWL fundus camera.
-
-    Returns
-    -------
-    np.ndarray
-        BGR image containing only the retinal disc region; background
-        pixels are black.
-
-    Raises
-    ------
-    FileNotFoundError
-        If *filename* cannot be read by OpenCV.
-    ValueError
-        If no fundus contour can be detected in the image.
-    """
-    test_img = cv2.imread(filename)
-    if test_img is None:
-        raise FileNotFoundError(f"Cannot read image file: {filename!r}")
-
-    return extract_fundus_from_image(test_img, threshold_value=threshold_value)

@@ -12,6 +12,12 @@ from pathlib import Path
 
 import requests
 
+# Network timeout (seconds) for the Theia upload request. Without this,
+# requests.post blocks indefinitely if the API hangs or the connection
+# stalls, which can exhaust the small inference worker pool that calls
+# grade_request (see INFERENCE_WORKER_COUNT in fundus.py, default 2).
+_REQUEST_TIMEOUT_S = 30
+
 
 def grade_request(filename: str) -> float:
     """Upload a processed fundus image to Theia and return the DR grade.
@@ -30,8 +36,8 @@ def grade_request(filename: str) -> float:
     -------
     float
         The numeric diabetic-retinopathy grade from the API response, or
-        ``-1`` if the key file is missing, the HTTP request fails, or the
-        response cannot be parsed.
+        ``-1`` if the key file is missing, the request fails or times out,
+        or the response cannot be parsed.
     """
     base_folder = Path(os.environ.get("OPEN_DR_BASE", "/home/pi/openDR")).resolve()
     key_path = base_folder / "key"
@@ -44,18 +50,35 @@ def grade_request(filename: str) -> float:
         return -1
 
     uri = "https://theia.media.mit.edu/api/v1/uploadImage?key=" + key
-    with open(filename, "rb") as image_file:
-        response = requests.post(uri, files={"file": image_file})
+    try:
+        with open(filename, "rb") as image_file:
+            response = requests.post(
+                uri, files={"file": image_file}, timeout=_REQUEST_TIMEOUT_S
+            )
+    except requests.exceptions.RequestException as exc:
+        print(f"THEIA REQUEST FAILED: {exc}")
+        return -1
 
-    if response.status_code == 200:
+    if response.status_code != 200:
+        return -1
+
+    try:
         data = json.loads(response.text)
-        grade_value = data.get("grade")
-        if isinstance(grade_value, list) and grade_value:
-            return float(grade_value[0])
+    except json.JSONDecodeError:
+        print("THEIA RESPONSE WAS NOT VALID JSON.")
+        return -1
+
+    if not isinstance(data, dict):
+        print(f"THEIA RESPONSE HAD UNEXPECTED SHAPE: {type(data).__name__}")
+        return -1
+
+    grade_value = data.get("grade")
+    if isinstance(grade_value, list):
+        grade_value = grade_value[0] if grade_value else None
+
+    try:
         return float(grade_value)
-    return -1
-
-
-## BEGIN THE REQUEST:
-# print grade_request(open('normal1.jpg', 'rb'))
+    except (TypeError, ValueError):
+        print(f"THEIA RESPONSE HAD UNEXPECTED GRADE VALUE: {grade_value!r}")
+        return -1
 

@@ -34,6 +34,23 @@
       {{ camera_warning or "Câmera indisponível - você ainda pode enviar fotos para análise" }}
     </div>
     {% endif %}
+    <div class="w-full rounded-xl border border-slate-700 bg-slate-800/60 p-2.5 space-y-1.5">
+      <p class="text-slate-500 text-[10px] uppercase tracking-widest text-center">Olho</p>
+      <div class="flex gap-2">
+        <button
+          type="button"
+          id="eye-od-button"
+          data-eye="OD"
+          class="flex-1 rounded-lg border px-3 py-2 text-xs font-semibold transition"
+        >OD (Direito)</button>
+        <button
+          type="button"
+          id="eye-os-button"
+          data-eye="OS"
+          class="flex-1 rounded-lg border px-3 py-2 text-xs font-semibold transition"
+        >OS (Esquerdo)</button>
+      </div>
+    </div>
     {% set icon_button_names = ["Flip", "Vid", "Click", "Switch", "Shut"] %}
     {% set camera_dependent_names = ["Flip", "Vid"] %}
     {% for o in params %}
@@ -45,6 +62,7 @@
       <input type="hidden" name="contrast" value="{{ processing_settings.contrast }}" data-processing-input="contrast">
       <input type="hidden" name="fundus_threshold" value="{{ processing_settings.fundus_threshold }}" data-processing-input="fundus_threshold">
       <input type="hidden" name="glare_threshold" value="{{ processing_settings.glare_threshold }}" data-processing-input="glare_threshold">
+      <input type="hidden" name="eye" value="{{ selected_eye }}" data-eye-input>
       <button
         name="d"
         value="{{ o }}"
@@ -81,6 +99,7 @@
       data-allowed-extensions="{{ upload_allowed_extensions | join(',') }}"
       class="w-full rounded-2xl border border-indigo-800 bg-slate-800/60 p-3 space-y-2"
     >
+      <input type="hidden" name="eye" value="{{ selected_eye }}" data-eye-input>
       <p class="text-slate-500 text-[10px] uppercase tracking-widest text-center">Enviar foto</p>
 
       <label
@@ -310,6 +329,7 @@
       data-glaucoma-job-id="{{ glaucoma_job_id or '' }}"
       data-patient-id="{{ patient_id or '' }}"
       data-camera-available="{{ 'true' if camera_available else 'false' }}"
+      data-selected-eye="{{ selected_eye }}"
       data-poll-interval-ms="1000"
       data-default-brightness="{{ processing_defaults.brightness }}"
       data-default-contrast="{{ processing_defaults.contrast }}"
@@ -516,6 +536,8 @@
       resetProcessingButton: document.getElementById('reset-processing'),
       adjustedPreviewButton: document.getElementById('preview-mode-adjusted'),
       thresholdPreviewButton: document.getElementById('preview-mode-threshold'),
+      eyeOdButton: document.getElementById('eye-od-button'),
+      eyeOsButton: document.getElementById('eye-os-button'),
     };
 
     const missingElementNames = Object.entries(elements)
@@ -564,6 +586,8 @@
       resetProcessingButton,
       adjustedPreviewButton,
       thresholdPreviewButton,
+      eyeOdButton,
+      eyeOsButton,
     } = elements;
     const explainButton = document.getElementById('explain-button');
 
@@ -572,6 +596,7 @@
     const workingCanvas = document.createElement('canvas');
     const workingContext = workingCanvas.getContext('2d', { willReadFrequently: true });
     const processingInputs = document.querySelectorAll('[data-processing-input]');
+    const eyeInputs = document.querySelectorAll('[data-eye-input]');
     const PREVIEW_UPDATE_INTERVAL_MS = 500;
     const MAX_RENDER_DIMENSION = 480;
     const INFERENCE_POLL_INTERVAL_MS = parseInt(
@@ -625,6 +650,7 @@
       glareThreshold: parseInt(glareThresholdSlider.value, 10),
     };
 
+    let selectedEye = workflowPanel.dataset.selectedEye === 'OS' ? 'OS' : 'OD';
     let inferenceJobId = workflowPanel.dataset.inferenceJobId || '';
     const patientId = workflowPanel.dataset.patientId || '';
     const galleryPageSize = parseInt(workflowPanel.dataset.galleryPageSize || '12', 10);
@@ -696,7 +722,8 @@
         return;
       }
 
-      galleryMetaPatient.textContent = item.patient_id || patientId || 'N/A';
+      const patientLabel = item.patient_id || patientId || 'N/A';
+      galleryMetaPatient.textContent = item.eye ? `${patientLabel} · ${item.eye}` : patientLabel;
       galleryMetaDate.textContent = formatCapturedAt(item.captured_at);
       galleryMetaResult.textContent = buildResultSummary(item);
       if (item.result && item.result.json_url) {
@@ -735,7 +762,7 @@
         button.dataset.captureItem = 'thumbnail';
         button.dataset.filename = item.filename;
         button.className = 'rounded-lg border border-slate-700 bg-slate-950 p-0.5 transition hover:border-slate-500';
-        button.title = `${item.patient_id} · ${formatCapturedAt(item.captured_at)}`;
+        button.title = `${item.patient_id} (${item.eye || 'N/A'}) · ${formatCapturedAt(item.captured_at)}`;
 
         const image = document.createElement('img');
         image.src = item.thumbnail_url;
@@ -897,6 +924,17 @@
       contrastValue.textContent = `${(processingSettings.contrast / 100).toFixed(2)}x`;
       fundusThresholdValue.textContent = processingSettings.fundusThreshold;
       glareThresholdValue.textContent = `${processingSettings.glareThreshold}%`;
+    };
+
+    const setSelectedEye = (eye) => {
+      selectedEye = eye;
+      const activeClass = 'flex-1 rounded-lg border border-amber-500 bg-amber-500/15 px-3 py-2 text-xs font-semibold text-amber-300 transition';
+      const inactiveClass = 'flex-1 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-slate-500 hover:bg-slate-800';
+      eyeOdButton.className = eye === 'OD' ? activeClass : inactiveClass;
+      eyeOsButton.className = eye === 'OS' ? activeClass : inactiveClass;
+      eyeInputs.forEach((input) => {
+        input.value = eye;
+      });
     };
 
     const setPreviewMode = (mode) => {
@@ -1141,6 +1179,8 @@
 
     adjustedPreviewButton.addEventListener('click', () => setPreviewMode('adjusted'));
     thresholdPreviewButton.addEventListener('click', () => setPreviewMode('threshold'));
+    eyeOdButton.addEventListener('click', () => setSelectedEye('OD'));
+    eyeOsButton.addEventListener('click', () => setSelectedEye('OS'));
     galleryLoadMore.addEventListener('click', () => {
       if (!galleryHasMore || galleryIsLoading) {
         return;
@@ -1151,6 +1191,7 @@
     syncProcessingInputs();
     updateControlLabels();
     setPreviewMode('adjusted');
+    setSelectedEye(selectedEye);
     setFocusState(false);
     if (workflowPanel.dataset.cameraAvailable === 'true') {
       updatePreview();

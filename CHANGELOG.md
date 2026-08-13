@@ -6,6 +6,8 @@
 - `tools/download_glaucoma_model.py` fetches the glaucoma checkpoint (~111 MB, not committed to the repo) via a streaming HTTP GET.
 - Photo upload (`/upload-image`): analyse an existing fundus photo without the camera, with drag-and-drop, client-side preview, and format/size validation in the capture UI.
 - Patient sessions can now start without a working camera (upload-only mode) — a banner and disabled camera controls make this explicit instead of failing outright.
+- **Eye laterality (OD/OS)**: the capture UI now has an OD/Direito · OS/Esquerdo toggle; every capture (camera click, video, upload) is tagged with the selected eye, encoded in the saved filename and surfaced in the patient gallery (thumbnail tooltip and detail panel).
+- The session-start screen now suggests existing patient ids (`<datalist>` autocomplete, backed by a new `list_known_patient_ids()` scan of the images directory) so a returning patient is matched to their existing history instead of a differently-typed id fragmenting it.
 
 ### Changed
 - Migrated `fundus.py` from `Fundus_Cam` to `RetinaCamera` (contrast-enhanced capture, typed hardware exceptions, graceful degradation on camera faults).

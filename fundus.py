@@ -48,6 +48,8 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 BASE_FOLDER = Path(os.environ.get("OPEN_DR_BASE", "/home/pi/openDR")).resolve()
 TOKENS = ["Flip", "Vid", "Click", "Switch", "Grade", "Explain", "Glaucoma", "Shut"]
 PATIENT_ID_RE = re.compile(r"^[A-Z0-9_-]{1,64}$")
+EYE_CHOICES = ("OD", "OS")
+DEFAULT_EYE = "OD"
 FOCUS_WARNING_MESSAGE = "Posicione o paciente e foque antes de capturar"
 CAMERA_UNAVAILABLE_MESSAGE = (
     "Câmera indisponível - você ainda pode enviar fotos para análise"
@@ -87,7 +89,7 @@ INFERENCE_STEPS = (
     ("report", "Geração do relatório"),
 )
 CAPTURE_FILENAME_RE = re.compile(
-    r"^(?P<patient_id>.+)_(?P<date>\d{8})_(?P<time>\d{12})_(?P<uuid>[0-9a-f]{32})_(?P<capture>\d+)\.jpg$"
+    r"^(?P<patient_id>.+)_(?P<eye>OD|OS)_(?P<date>\d{8})_(?P<time>\d{12})_(?P<uuid>[0-9a-f]{32})_(?P<capture>\d+)\.jpg$"
 )
 GALLERY_DEFAULT_PAGE_SIZE = 12
 GALLERY_MAX_PAGE_SIZE = 60
@@ -117,6 +119,7 @@ class CameraSessionState:
         self.job_ids = {"dr_explain": None, "glaucoma": None}
         self.patient_id = ""
         self.processing_settings = default_processing_settings()
+        self.selected_eye = DEFAULT_EYE
 
     def reset(self):
         self.clear_job_ids()
@@ -124,6 +127,7 @@ class CameraSessionState:
         self.last_img = None
         self.camera_error = None
         self.processing_settings = default_processing_settings()
+        self.selected_eye = DEFAULT_EYE
 
     def clear_job_ids(self):
         """Invalidate any in-flight/completed report jobs for the active image.
@@ -189,6 +193,27 @@ def update_processing_settings_from_request(form_data):
     with state.lock:
         state.processing_settings = updated_settings
     return updated_settings
+
+
+def get_selected_eye():
+    with state.lock:
+        return state.selected_eye
+
+
+def update_selected_eye_from_request(form_data):
+    """Update the session's active eye laterality from a submitted form.
+
+    Every action form in the capture UI carries an ``eye`` hidden field
+    (mirroring ``brightness``/``contrast``/...), so whichever button the
+    clinician presses keeps the current OD/OS selection in sync with
+    ``state``. An absent or invalid value leaves the current selection
+    unchanged rather than resetting it.
+    """
+    eye = (form_data.get("eye") or "").strip().upper()
+    if eye in EYE_CHOICES:
+        with state.lock:
+            state.selected_eye = eye
+    return get_selected_eye()
 
 
 @atexit.register
@@ -258,14 +283,14 @@ def start_heavy_job(kind, submit_job):
 @app.route("/")
 def my_form():
     normalON()
-    return render_template("index.html")
+    return render_template("index.html", known_patient_ids=list_known_patient_ids())
 
 
 @app.route("/", methods=["POST"])
 def my_form_post():
     patient_id = sanitize_patient_id(request.form.get("text", "").upper())
     if not patient_id:
-        return render_template("index.html")
+        return render_template("index.html", known_patient_ids=list_known_patient_ids())
 
     make_a_dir(patient_id)
     camera, camera_error = start_camera_safely()
@@ -285,6 +310,7 @@ def captureSimpleFunc():
         return render_capture()
 
     processing_settings = update_processing_settings_from_request(request.form)
+    selected_eye = update_selected_eye_from_request(request.form)
 
     if "d" not in request.form:
         return render_capture()
@@ -305,7 +331,7 @@ def captureSimpleFunc():
                 return render_capture(error_message)
             if not is_eye_in_focus(image):
                 return render_capture(FOCUS_WARNING_MESSAGE)
-            state.last_img = save_captured_images(state.patient_id, image)
+            state.last_img = save_captured_images(state.patient_id, image, selected_eye)
             state.clear_job_ids()
         return render_capture()
 
@@ -330,7 +356,9 @@ def captureSimpleFunc():
                 error_message = "FALHA NA CÂMERA DURANTE A GRAVAÇÃO"
                 state.deactivate_camera(error_message)
                 return render_capture(error_message)
-            state.last_img = save_captured_images(state.patient_id, state.camera.images)
+            state.last_img = save_captured_images(
+                state.patient_id, state.camera.images, selected_eye
+            )
             state.clear_job_ids()
         return render_capture()
 
@@ -430,6 +458,8 @@ def upload_image():
     if not patient_id:
         return render_capture("NENHUMA SESSÃO ATIVA - INICIE UMA SESSÃO")
 
+    selected_eye = update_selected_eye_from_request(request.form)
+
     uploaded = request.files.get("image")
     if uploaded is None or not uploaded.filename:
         return render_capture("NENHUM ARQUIVO ENVIADO")
@@ -450,7 +480,7 @@ def upload_image():
     with state.lock:
         if not state.patient_id:
             return render_capture("NENHUMA SESSÃO ATIVA - INICIE UMA SESSÃO")
-        state.last_img = save_captured_images(state.patient_id, image)
+        state.last_img = save_captured_images(state.patient_id, image, selected_eye)
         state.clear_job_ids()
     return render_capture("IMAGEM ENVIADA")
 
@@ -520,6 +550,7 @@ def render_capture(
         patient_id=patient_id,
         camera_available=camera_available,
         camera_warning=camera_warning,
+        selected_eye=get_selected_eye(),
         gallery_page_size=GALLERY_DEFAULT_PAGE_SIZE,
         processing_settings=get_processing_settings(),
         processing_defaults=default_processing_settings(),
@@ -972,24 +1003,25 @@ def capture_gallery():
     )
 
 
-def save_captured_images(patient_id, images):
+def save_captured_images(patient_id, images, eye):
     no = 1
     patient_id = validated_patient_id(patient_id)
+    eye = validated_eye(eye)
     last_saved_path = None
 
     if isinstance(images, list):
         for img in images:
-            image_path = write_captured_image(patient_id, no, img)
+            image_path = write_captured_image(patient_id, eye, no, img)
             last_saved_path = str(image_path)
             no += 1
     else:
-        image_path = write_captured_image(patient_id, no, images)
+        image_path = write_captured_image(patient_id, eye, no, images)
         last_saved_path = str(image_path)
 
     return last_saved_path
 
 
-def write_captured_image(patient_id, capture_number, image_buffer):
+def write_captured_image(patient_id, eye, capture_number, image_buffer):
     """Persist one captured image with a direct JPEG write when possible.
 
     Picamera2 captures already arrive as JPEG byte buffers for the current
@@ -997,7 +1029,7 @@ def write_captured_image(patient_id, capture_number, image_buffer):
     unnecessary decode/re-encode round trip on the Raspberry Pi CPU. If a
     decoded image matrix is provided, OpenCV falls back to encoding it.
     """
-    image_filename = build_image_filename(patient_id, capture_number)
+    image_filename = build_image_filename(patient_id, eye, capture_number)
     image_path = images_directory() / image_filename
 
     if isinstance(image_buffer, (bytes, bytearray)):
@@ -1064,6 +1096,7 @@ def parse_capture_filename(filename):
 
     return {
         "patient_id": match.group("patient_id"),
+        "eye": match.group("eye"),
         "capture_number": int(match.group("capture")),
         "captured_at": captured_at,
     }
@@ -1131,6 +1164,7 @@ def _cached_patient_capture_metadata(patient_id, directory_mtime_ns):
             {
                 "filename": image_path.name,
                 "patient_id": patient_id,
+                "eye": parsed["eye"],
                 "capture_number": parsed["capture_number"],
                 "captured_at": parsed["captured_at"].isoformat(),
                 "image_url": url_for("serve_image", filename=image_path.name),
@@ -1147,6 +1181,37 @@ def _cached_patient_capture_metadata(patient_id, directory_mtime_ns):
 
     metadata.sort(key=lambda item: item["captured_at"], reverse=True)
     return metadata
+
+
+def list_known_patient_ids():
+    """Return every distinct patient id with at least one capture on disk.
+
+    Surfaced as autocomplete suggestions on the session-start screen so a
+    clinician re-identifying a returning patient picks the existing id
+    instead of retyping a near-miss variant (e.g. a stray hyphen/space)
+    that would silently fragment that patient's capture history across two
+    different ids.
+    """
+    directory = images_directory()
+    if not directory.exists():
+        return []
+    return _cached_known_patient_ids(directory.stat().st_mtime_ns)
+
+
+@lru_cache(maxsize=1)
+def _cached_known_patient_ids(directory_mtime_ns):
+    # directory_mtime_ns is part of the cache key purely for invalidation,
+    # mirroring _cached_patient_capture_metadata.
+    _ = directory_mtime_ns
+    directory = images_directory()
+
+    patient_ids = set()
+    for image_path in directory.glob("*.jpg"):
+        parsed = parse_capture_filename(image_path.name)
+        if parsed is not None:
+            patient_ids.add(parsed["patient_id"])
+
+    return sorted(patient_ids)
 
 
 @lru_cache(maxsize=256)
@@ -1193,12 +1258,13 @@ def open_captured_image_file(image_filename):
     return output_path.open("wb")
 
 
-def build_image_filename(patient_id, capture_number):
+def build_image_filename(patient_id, eye, capture_number):
     patient_id = validated_patient_id(patient_id)
+    eye = validated_eye(eye)
     image_identifier = (
         f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S%f')}_{uuid4().hex}"
     )
-    return f"{patient_id}_{image_identifier}_{capture_number}.jpg"
+    return f"{patient_id}_{eye}_{image_identifier}_{capture_number}.jpg"
 
 
 def make_a_dir(pr_t):
@@ -1217,6 +1283,12 @@ def sanitize_patient_id(value):
 def validated_patient_id(value):
     if not PATIENT_ID_RE.fullmatch(value):
         raise ValueError("Invalid patient identifier.")
+    return value
+
+
+def validated_eye(value):
+    if value not in EYE_CHOICES:
+        raise ValueError("Invalid eye laterality.")
     return value
 
 

@@ -26,9 +26,15 @@
         type="text"
         name="text"
         autocomplete="off"
+        list="known-patients"
         placeholder="e.g.&nbsp;MR12345"
         class="w-full bg-slate-800 text-white border border-slate-600 rounded-lg px-4 py-3 text-base placeholder-slate-500 focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400 transition"
       >
+      <datalist id="known-patients">
+        {% for pid in known_patient_ids %}
+        <option value="{{ pid }}"></option>
+        {% endfor %}
+      </datalist>
       <button
         type="submit"
         name="my-form"

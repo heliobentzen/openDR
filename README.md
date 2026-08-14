@@ -1,6 +1,6 @@
 ## Open Indirect Ophthalmoscope (OIO / OWL)
 _Original authors: Ayush Yadav, Ebin Philip, Dhruv Joshi_  
-_Maintained by: [@heliobentzen](https://github.com/heliobentzen), GitHub Copilot_
+_Maintained by: [@heliobentzen](https://github.com/heliobentzen)_
 
 Built at the Srujana Center for Innovation, LV Prasad Eye Institute, Hyderabad, India.
 

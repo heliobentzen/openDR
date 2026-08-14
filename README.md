@@ -62,6 +62,25 @@ Served by [waitress](https://docs.pylonsproject.org/projects/waitress/) (a produ
 - Legacy `picamera` usage has been replaced with `Picamera2` (libcamera backend).
 - Vertical camera flipping is now handled in software before JPEG encoding.
 
+## Related project: eyevitas (edge + server split)
+
+`openDR` runs the whole pipeline on the Raspberry Pi. That works well for the
+DR grading path, but the glaucoma screener added in 4.1 (ConvNeXt-Tiny at
+896×896 plus Grad-CAM) costs more than a Pi 4 can comfortably pay — roughly
+70 GFLOPs per forward pass, plus a backward pass and its retained activations.
+
+[**eyevitas**](https://github.com/heliobentzen/eyevitas) is a companion
+project that splits the same pipeline in two: the Pi captures, gates image
+quality and pre-processes; a web application runs the full model, renders the
+Grad-CAM overlay and hosts the review/annotation/export screens. The edge
+agent queues exams on disk and forwards them when connectivity returns, so a
+clinic without a stable link keeps working.
+
+It reuses this repository's `modules/glaucoma.py`, `modules/heatmap.py`, the
+focus-gating heuristics from `fundus.py` and the `RetinaCamera` error
+taxonomy. Use `openDR` for a self-contained device; use `eyevitas` when exams
+from one or more devices need to be processed and reviewed centrally.
+
 ## Folder structure
 `images` contains captured patient/session images (patient ID included in filenames).  
 `modules` contains image processing and grading modules.  

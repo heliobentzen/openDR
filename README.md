@@ -62,24 +62,44 @@ Served by [waitress](https://docs.pylonsproject.org/projects/waitress/) (a produ
 - Legacy `picamera` usage has been replaced with `Picamera2` (libcamera backend).
 - Vertical camera flipping is now handled in software before JPEG encoding.
 
-## Related project: eyevitas (edge + server split)
-
-`openDR` runs the whole pipeline on the Raspberry Pi. That works well for the
-DR grading path, but the glaucoma screener added in 4.1 (ConvNeXt-Tiny at
-896×896 plus Grad-CAM) costs more than a Pi 4 can comfortably pay — roughly
-70 GFLOPs per forward pass, plus a backward pass and its retained activations.
+## Related project: eyevitas
 
 [**eyevitas**](https://github.com/heliobentzen/eyevitas) is a companion
-project that splits the same pipeline in two: the Pi captures, gates image
-quality and pre-processes; a web application runs the full model, renders the
-Grad-CAM overlay and hosts the review/annotation/export screens. The edge
-agent queues exams on disk and forwards them when connectivity returns, so a
-clinic without a stable link keeps working.
+project built on this codebase. It reuses `modules/glaucoma.py`,
+`modules/heatmap.py`, the focus-gating heuristics from `fundus.py` and the
+`RetinaCamera` error taxonomy, and adds a web application for reviewing,
+annotating and exporting exams — plus a disk-backed queue so a clinic with an
+unstable link keeps working.
 
-It reuses this repository's `modules/glaucoma.py`, `modules/heatmap.py`, the
-focus-gating heuristics from `fundus.py` and the `RetinaCamera` error
-taxonomy. Use `openDR` for a self-contained device; use `eyevitas` when exams
-from one or more devices need to be processed and reviewed centrally.
+It runs either way: everything on a single Raspberry Pi, or capture on one or
+more devices with a separate server. Use `openDR` for a self-contained
+imaging device; use `eyevitas` when exams need to be reviewed, annotated and
+exported, or when several devices feed one place.
+
+### A Grad-CAM optimisation worth porting back
+
+`modules/gradcam.py` and `modules/glaucoma.py` compute Grad-CAM the
+conventional way: a forward pass with `requires_grad`, which builds the graph
+across the whole trunk and retains every block's activations. But Grad-CAM
+only needs `∂y/∂A`, where `A` is the last stage's output, and that gradient
+depends solely on the subgraph `A → y` — the head. Running the trunk under
+`no_grad` and enabling gradients from `A` onward yields a **numerically
+identical** map. Measured on x86 at 896×896 with `convnext_tiny`:
+
+| Path | Time | Peak RAM |
+|---|---|---|
+| full graph (current) | 6.0 s | 2656 MB |
+| split graph | 1.2 s | 1096 MB |
+
+Roughly 5× faster, with the increment over baseline dropping from ~1830 MB to
+~270 MB. That is the difference between the 896×896 glaucoma report being
+impractical on a Pi 4 and being routine. eyevitas implements this in
+`eyevitas/analysis/glaucoma.py::_split_graph_cam`, with a test asserting
+equivalence against the conventional path.
+
+A related fix from the same work: after the backward pass, gradients stay
+attached to the cached model's parameters — about 115 MB in fp32, held for
+the life of the process. Both paths should clear them in a `finally` block.
 
 ## Folder structure
 `images` contains captured patient/session images (patient ID included in filenames).  

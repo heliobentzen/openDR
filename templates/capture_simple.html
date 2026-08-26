@@ -19,16 +19,63 @@
     #glaucoma-compare-handle {
       left: var(--pos);
     }
+
+    /* Slim, theme-matched scrollbars for the dark UI (WebKit/Blink — the
+       Chromium kiosk browser this app targets on the Raspberry Pi). */
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+    }
+    *::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    *::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    *::-webkit-scrollbar-thumb {
+      background-color: rgba(148, 163, 184, 0.35);
+      border-radius: 9999px;
+    }
+    *::-webkit-scrollbar-thumb:hover {
+      background-color: rgba(148, 163, 184, 0.55);
+    }
   </style>
 </head>
 
-<body class="h-screen bg-slate-950 text-white flex overflow-hidden">
+<body class="h-screen bg-slate-950 text-white flex flex-col overflow-hidden antialiased">
 
-  <aside class="bg-slate-900 border-r border-slate-700 flex flex-col gap-3 p-3 w-80 shrink-0 overflow-y-auto">
+  <header class="flex items-center justify-between gap-3 border-b border-white/10 bg-slate-900/80 backdrop-blur-xl px-4 py-2.5 shrink-0">
+    <div class="flex items-center gap-2.5">
+      <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 shadow shadow-amber-500/30">
+        <svg class="h-4 w-4 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+        </svg>
+      </div>
+      <p class="text-sm font-bold tracking-wide text-white">OWL <span class="text-slate-500 font-normal">&middot; openDR</span></p>
+    </div>
+
+    <div class="flex items-center gap-2">
+      {% if patient_id %}
+      <span class="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-xs font-medium text-slate-200">
+        <span class="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
+        {{ patient_id }}
+      </span>
+      {% endif %}
+      <span class="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-xs font-medium {% if camera_available %}text-emerald-300{% else %}text-rose-300{% endif %}">
+        <span class="h-1.5 w-1.5 rounded-full {% if camera_available %}bg-emerald-400{% else %}bg-rose-400{% endif %}"></span>
+        {% if camera_available %}Câmera ativa{% else %}Sem câmera{% endif %}
+      </span>
+    </div>
+  </header>
+
+  <div class="flex-1 flex overflow-hidden">
+  <aside class="bg-slate-900/70 backdrop-blur-xl border-r border-white/10 flex flex-col gap-3 p-3 w-80 shrink-0 overflow-y-auto">
     <p class="text-slate-500 text-[10px] uppercase tracking-widest mb-1">Controls</p>
     {% if not camera_available %}
     <div
-      class="w-full rounded-xl border border-amber-700 bg-amber-950/40 px-3 py-2 text-[11px] text-amber-300"
+      class="w-full rounded-xl border border-amber-700/60 bg-amber-950/40 px-3 py-2 text-[11px] text-amber-300"
       role="status"
     >
       {{ camera_warning or "Câmera indisponível - você ainda pode enviar fotos para análise" }}
@@ -54,10 +101,10 @@
         {% if o == "Click" %}disabled aria-disabled="true"
         {% elif o in camera_dependent_names and not camera_available %}disabled aria-disabled="true"{% endif %}
         class="group w-full flex flex-col items-center gap-1.5 py-2.5 px-1 rounded-xl border font-semibold text-[11px] text-center cursor-pointer select-none transition-all duration-150 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900
-          {% if o == "Click" %}bg-amber-500 border-amber-400 text-slate-900 hover:bg-amber-400 shadow-md shadow-amber-500/20 hover:shadow-amber-400/30 focus-visible:ring-amber-400 disabled:bg-slate-700 disabled:border-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed disabled:shadow-none disabled:scale-100
-          {% elif o == "Explain" %}bg-teal-700 border-teal-600 text-white hover:bg-teal-600 shadow-md shadow-teal-700/20 hover:shadow-teal-600/30 focus-visible:ring-teal-400
-          {% elif o == "Shut" %}bg-rose-950 border-rose-800 text-rose-300 hover:bg-rose-900 hover:border-rose-700 focus-visible:ring-rose-500
-          {% else %}bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 hover:border-slate-600 focus-visible:ring-slate-400 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-slate-800 disabled:hover:border-slate-700{% endif %}"
+          {% if o == "Click" %}bg-gradient-to-b from-amber-400 to-amber-500 border-amber-400 text-slate-900 hover:from-amber-300 hover:to-amber-400 shadow-md shadow-amber-500/20 hover:shadow-amber-400/30 focus-visible:ring-amber-400 disabled:bg-slate-700 disabled:from-slate-700 disabled:to-slate-700 disabled:border-white/10 disabled:text-slate-400 disabled:cursor-not-allowed disabled:shadow-none disabled:scale-100
+          {% elif o == "Explain" %}bg-teal-700/80 border-teal-600/60 text-white hover:bg-teal-600 shadow-md shadow-teal-700/20 hover:shadow-teal-600/30 focus-visible:ring-teal-400
+          {% elif o == "Shut" %}bg-rose-950/60 border-rose-800/60 text-rose-300 hover:bg-rose-900 hover:border-rose-700 focus-visible:ring-rose-500
+          {% else %}bg-slate-800/80 border-white/10 text-slate-200 hover:bg-slate-700 hover:border-white/20 focus-visible:ring-slate-400 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-slate-800 disabled:hover:border-white/10{% endif %}"
       >
         {% if o in icon_button_names %}
         <img
@@ -79,19 +126,19 @@
       id="upload-form"
       data-max-bytes="{{ max_upload_bytes }}"
       data-allowed-extensions="{{ upload_allowed_extensions | join(',') }}"
-      class="w-full rounded-2xl border border-indigo-800 bg-slate-800/60 p-3 space-y-2"
+      class="w-full rounded-2xl border border-indigo-800/50 bg-slate-800/40 p-3 space-y-2 shadow-sm shadow-black/20"
     >
       <p class="text-slate-500 text-[10px] uppercase tracking-widest text-center">Enviar foto</p>
 
       <label
         id="upload-dropzone"
         for="upload-input"
-        class="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-slate-600 bg-slate-900/60 px-3 py-4 text-center cursor-pointer transition-colors hover:border-indigo-500 hover:bg-slate-900"
+        class="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/10 bg-slate-900/60 px-3 py-4 text-center cursor-pointer transition-colors hover:border-indigo-500 hover:bg-slate-900"
       >
         <img
           id="upload-preview-img"
           alt="Pré-visualização da foto selecionada"
-          class="hidden max-h-24 w-auto rounded-lg border border-slate-700 object-cover"
+          class="hidden max-h-24 w-auto rounded-lg border border-white/10 object-cover"
         >
         <svg id="upload-dropzone-icon" class="w-6 h-6 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
@@ -125,7 +172,7 @@
       </button>
     </form>
 
-    <section class="rounded-2xl border border-slate-700 bg-slate-950/80 p-4 space-y-4">
+    <section class="rounded-2xl border border-white/10 bg-slate-950/60 p-4 space-y-4 shadow-sm shadow-black/20">
       <div class="flex items-start justify-between gap-3">
         <div>
           <p class="text-slate-500 text-[10px] uppercase tracking-widest">Ajustes de imagem</p>
@@ -134,7 +181,7 @@
         <button
           type="button"
           id="reset-processing"
-          class="rounded-lg border border-slate-600 px-2.5 py-1 text-[11px] font-semibold text-slate-200 transition hover:border-slate-500 hover:bg-slate-800"
+          class="rounded-lg border border-white/10 px-2.5 py-1 text-[11px] font-semibold text-slate-200 transition hover:border-white/25 hover:bg-slate-800"
         >
           Resetar
         </button>
@@ -153,7 +200,7 @@
           type="button"
           id="preview-mode-threshold"
           data-preview-mode="threshold"
-          class="flex-1 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-slate-500 hover:bg-slate-800"
+          class="flex-1 rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-white/25 hover:bg-slate-800"
         >
           Limiar
         </button>
@@ -195,37 +242,39 @@
     </section>
   </aside>
 
-  <main class="flex-1 flex overflow-hidden">
-    <section class="flex-1 flex flex-col overflow-hidden">
-      <div class="bg-slate-900 border-b border-slate-700 px-4 py-2 flex items-center justify-between shrink-0">
-        <span class="text-slate-500 text-xs uppercase tracking-widest">Retina Preview</span>
-        <span
-          id="grade-display"
-          class="font-bold text-sm text-amber-400"
-          aria-label="Grade: {{ grades.get('grade', 'Not Available') }}"
-        >{{ grades.get('grade') or 'N/A' }}</span>
-      </div>
+  <main class="flex-1 flex overflow-hidden bg-slate-950">
+    <section class="flex-1 flex flex-col overflow-hidden p-3 gap-3">
+      <div class="flex-1 flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-black shadow-lg shadow-black/40">
+        <div class="bg-slate-900/80 backdrop-blur-xl border-b border-white/10 px-4 py-2 flex items-center justify-between shrink-0 rounded-t-2xl">
+          <span class="text-slate-500 text-xs uppercase tracking-widest">Retina Preview</span>
+          <span
+            id="grade-display"
+            class="font-bold text-sm text-amber-400"
+            aria-label="Grade: {{ grades.get('grade', 'Not Available') }}"
+          >{{ grades.get('grade') or 'N/A' }}</span>
+        </div>
 
-      <div class="flex-1 flex items-center justify-center bg-black relative overflow-hidden">
-        <img id="preview-frame" alt="Pré-visualização da retina" class="hidden">
-        <canvas id="preview-canvas" class="max-w-full max-h-full"></canvas>
-        <canvas id="analysis-canvas" class="hidden"></canvas>
-        <p id="preview-status" class="sr-only" role="status" aria-live="polite"></p>
-        <div
-          id="focus-overlay"
-          class="absolute inset-0 flex items-center justify-center bg-black/65 p-6 text-center"
-          role="alert"
-          aria-live="assertive"
-        >
-          <p class="max-w-lg text-amber-300 font-semibold text-lg">
-            {{ focus_warning_message }}
-          </p>
+        <div class="flex-1 flex items-center justify-center bg-black relative overflow-hidden">
+          <img id="preview-frame" alt="Pré-visualização da retina" class="hidden">
+          <canvas id="preview-canvas" class="max-w-full max-h-full"></canvas>
+          <canvas id="analysis-canvas" class="hidden"></canvas>
+          <p id="preview-status" class="sr-only" role="status" aria-live="polite"></p>
+          <div
+            id="focus-overlay"
+            class="absolute inset-0 flex items-center justify-center bg-black/65 p-6 text-center"
+            role="alert"
+            aria-live="assertive"
+          >
+            <p class="max-w-lg text-amber-300 font-semibold text-lg">
+              {{ focus_warning_message }}
+            </p>
+          </div>
         </div>
       </div>
 
       <div
         id="report-panel"
-        class="{% if not overlay_filename %}hidden {% endif %}bg-slate-900 border-t border-teal-700 p-4 shrink-0"
+        class="{% if not overlay_filename %}hidden {% endif %}rounded-2xl bg-slate-900/70 border border-teal-800/60 p-4 shrink-0 shadow-sm shadow-black/20"
       >
         <p class="text-teal-400 font-semibold text-sm mb-2">Relatório gerado</p>
         <p id="report-summary" class="text-slate-400 text-xs mb-3">
@@ -244,7 +293,7 @@
           id="report-image"
           {% if overlay_filename %}src="{{ url_for('serve_image', filename=overlay_filename) }}"{% endif %}
           alt="Grad-CAM heatmap overlay"
-          class="max-w-full rounded border border-teal-700 mb-3"
+          class="max-w-full rounded-xl border border-teal-800/60 mb-3"
         >
         <a
           id="report-download"
@@ -256,7 +305,7 @@
 
       <div
         id="glaucoma-report-panel"
-        class="hidden bg-slate-900 border-t border-violet-700 p-4 shrink-0"
+        class="hidden rounded-2xl bg-slate-900/70 border border-violet-800/60 p-4 shrink-0 shadow-sm shadow-black/20"
       >
         <p class="text-violet-400 font-semibold text-sm mb-2">Triagem de Glaucoma</p>
         <p id="glaucoma-verdict" class="font-bold text-base mb-2"></p>
@@ -268,7 +317,7 @@
           <span id="glaucoma-threshold" class="text-white font-medium">N/A</span>
         </p>
 
-        <div id="glaucoma-compare" class="relative overflow-hidden rounded border border-violet-700 mb-2">
+        <div id="glaucoma-compare" class="relative overflow-hidden rounded-xl border border-violet-800/60 mb-2">
           <img id="glaucoma-compare-base" alt="Imagem original processada" class="block w-full">
           <div id="glaucoma-compare-layer" class="absolute inset-0 bg-cover bg-center"></div>
           <input
@@ -316,14 +365,14 @@
       data-default-fundus-threshold="{{ processing_defaults.fundus_threshold }}"
       data-default-glare-threshold="{{ processing_defaults.glare_threshold }}"
       data-gallery-page-size="{{ gallery_page_size }}"
-      class="w-[22rem] shrink-0 border-l border-slate-700 bg-slate-900/95 p-4 flex flex-col gap-4 overflow-y-auto"
+      class="w-[22rem] shrink-0 border-l border-white/10 bg-slate-900/70 backdrop-blur-xl p-4 flex flex-col gap-4 overflow-y-auto"
     >
       <div>
         <p class="text-slate-500 text-xs uppercase tracking-widest">Passo a passo</p>
         <h2 class="mt-1 text-lg font-semibold text-white">Acompanhamento da inferência</h2>
       </div>
 
-      <div class="rounded-xl border border-slate-700 bg-slate-950/60 p-3">
+      <div class="rounded-xl border border-white/10 bg-slate-950/60 p-3">
         <p id="workflow-message" class="text-sm text-slate-300">
           Capture uma imagem e clique em Relatório para acompanhar o fluxo.
         </p>
@@ -340,12 +389,12 @@
         {% for step_key, step_label in workflow_steps %}
         <section
           id="step-{{ step_key }}"
-          class="rounded-xl border border-slate-700 bg-slate-950/40 p-3 transition"
+          class="rounded-xl border border-white/10 bg-slate-950/40 p-3 transition"
         >
           <div class="flex items-start gap-3">
             <span
               id="step-icon-{{ step_key }}"
-              class="mt-1 flex h-7 w-7 items-center justify-center rounded-full border border-slate-600 text-xs font-bold text-slate-400"
+              class="mt-1 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-xs font-bold text-slate-400"
             >○</span>
             <div class="min-w-0 flex-1">
               <p class="text-sm font-semibold text-white">{{ step_label }}</p>
@@ -353,7 +402,7 @@
               <img
                 id="step-image-{{ step_key }}"
                 alt="{{ step_label }}"
-                class="mt-3 hidden w-full rounded-lg border border-slate-700 object-contain"
+                class="mt-3 hidden w-full rounded-lg border border-white/10 object-contain"
               >
             </div>
           </div>
@@ -361,12 +410,12 @@
         {% endfor %}
       </div>
 
-      <section id="glaucoma-progress-panel" class="rounded-xl border border-violet-800 bg-violet-950/20 p-3">
+      <section id="glaucoma-progress-panel" class="rounded-xl border border-violet-800/60 bg-violet-950/20 p-3">
         <div class="flex items-center justify-between gap-2">
           <p class="text-xs font-semibold text-violet-300">Triagem de Glaucoma</p>
           <span
             id="glaucoma-progress-icon"
-            class="flex h-6 w-6 items-center justify-center rounded-full border border-slate-600 text-xs font-bold text-slate-400"
+            class="flex h-6 w-6 items-center justify-center rounded-full border border-white/10 text-xs font-bold text-slate-400"
           >○</span>
         </div>
         <p id="glaucoma-progress-message" class="mt-1 text-xs text-slate-400">
@@ -374,17 +423,17 @@
         </p>
       </section>
 
-      <section id="gallery-panel" class="rounded-xl border border-slate-700 bg-slate-950/40 p-3 space-y-3">
+      <section id="gallery-panel" class="rounded-xl border border-white/10 bg-slate-950/40 p-3 space-y-3">
         <div>
           <p class="text-slate-500 text-[10px] uppercase tracking-widest">Navegação</p>
           <h3 class="mt-1 text-sm font-semibold text-white">Capturas do paciente</h3>
         </div>
 
-        <div class="rounded-lg border border-slate-700 bg-slate-900/60 p-2">
+        <div class="rounded-lg border border-white/10 bg-slate-900/60 p-2">
           <img id="gallery-selected-image" alt="Captura selecionada" class="w-full aspect-[4/3] rounded object-contain bg-black">
         </div>
 
-        <dl class="grid grid-cols-1 gap-2 text-xs rounded-lg border border-slate-700 bg-slate-900/60 p-2.5">
+        <dl class="grid grid-cols-1 gap-2 text-xs rounded-lg border border-white/10 bg-slate-900/60 p-2.5">
           <div>
             <dt class="text-slate-500">Paciente</dt>
             <dd id="gallery-meta-patient" class="text-slate-100 font-medium">N/A</dd>
@@ -411,13 +460,14 @@
         <button
           type="button"
           id="gallery-load-more"
-          class="hidden w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:border-slate-500 hover:bg-slate-800"
+          class="hidden w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:border-white/25 hover:bg-slate-800"
         >
           Carregar mais
         </button>
       </section>
     </aside>
   </main>
+  </div>
 
 </body>
 <script>
@@ -722,8 +772,8 @@
       galleryGrid.querySelectorAll('button[data-capture-item]').forEach((button) => {
         const isSelected = button.dataset.filename === item.filename;
         button.className = isSelected
-          ? 'rounded-lg border-2 border-amber-400 bg-slate-950 p-0.5 transition'
-          : 'rounded-lg border border-slate-700 bg-slate-950 p-0.5 transition hover:border-slate-500';
+          ? 'rounded-lg border border-amber-400 bg-slate-950 p-0.5 transition ring-2 ring-amber-400/60 ring-offset-2 ring-offset-slate-900 shadow-sm shadow-amber-500/20'
+          : 'rounded-lg border border-white/10 bg-slate-950 p-0.5 transition hover:border-white/25';
       });
     };
 
@@ -734,7 +784,7 @@
         button.type = 'button';
         button.dataset.captureItem = 'thumbnail';
         button.dataset.filename = item.filename;
-        button.className = 'rounded-lg border border-slate-700 bg-slate-950 p-0.5 transition hover:border-slate-500';
+        button.className = 'rounded-lg border border-white/10 bg-slate-950 p-0.5 transition hover:border-white/25';
         button.title = `${item.patient_id} · ${formatCapturedAt(item.captured_at)}`;
 
         const image = document.createElement('img');
@@ -809,8 +859,8 @@
     };
 
     const resetStepCard = (stepElements) => {
-      stepElements.card.className = 'rounded-xl border border-slate-700 bg-slate-950/40 p-3 transition';
-      stepElements.icon.className = 'mt-1 flex h-7 w-7 items-center justify-center rounded-full border border-slate-600 text-xs font-bold text-slate-400';
+      stepElements.card.className = 'rounded-xl border border-white/10 bg-slate-950/40 p-3 transition';
+      stepElements.icon.className = 'mt-1 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-xs font-bold text-slate-400';
       stepElements.icon.textContent = '○';
     };
 
@@ -904,10 +954,10 @@
       const isAdjusted = mode === 'adjusted';
       adjustedPreviewButton.className = isAdjusted
         ? 'flex-1 rounded-lg border border-amber-500 bg-amber-500/15 px-3 py-2 text-xs font-semibold text-amber-300 transition'
-        : 'flex-1 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-slate-500 hover:bg-slate-800';
+        : 'flex-1 rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-white/25 hover:bg-slate-800';
       thresholdPreviewButton.className = !isAdjusted
         ? 'flex-1 rounded-lg border border-amber-500 bg-amber-500/15 px-3 py-2 text-xs font-semibold text-amber-300 transition'
-        : 'flex-1 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-slate-500 hover:bg-slate-800';
+        : 'flex-1 rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-white/25 hover:bg-slate-800';
       schedulePreviewRender();
     };
 
@@ -1310,7 +1360,7 @@
       },
       pending: {
         icon: '○',
-        className: 'flex h-6 w-6 items-center justify-center rounded-full border border-slate-600 text-xs font-bold text-slate-400',
+        className: 'flex h-6 w-6 items-center justify-center rounded-full border border-white/10 text-xs font-bold text-slate-400',
       },
     };
 
